@@ -1,0 +1,3 @@
+# Die lokale Datenbank wird beim ersten Serverzugriff automatisch erstellt.
+*.sqlite
+*.sqlite-*
