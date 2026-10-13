@@ -1,0 +1,425 @@
+"use client";
+
+import Image from "next/image";
+import { useMemo, useRef, useState, type FormEvent } from "react";
+
+type Answer = { text: string; correct: boolean };
+type Question = { question: string; answers: Answer[] };
+type QuizResult = {
+  id: number;
+  name: string;
+  score: number;
+  total: number;
+  elapsedMs: number;
+};
+
+const questions: Question[] = [
+  {
+    question: "Wann und wo wurde Roche gegründet?",
+    answers: [
+      { text: "1896 in der Schweiz", correct: true },
+      { text: "1925 in Deutschland", correct: false },
+      { text: "2001 in den USA", correct: false },
+      { text: "1880 in Frankreich", correct: false },
+    ],
+  },
+  {
+    question: "Welche beiden Bereiche bilden das Roche-Geschäft?",
+    answers: [
+      { text: "Diagnostik und Pharma", correct: true },
+      { text: "Tourismus und Logistik", correct: false },
+      { text: "Software und Bauwesen", correct: false },
+      { text: "Ernährung und Sport", correct: false },
+    ],
+  },
+  {
+    question: "Was möchte Roche für Patient:innen erreichen?",
+    answers: [
+      { text: "Krankheiten verhindern, stoppen und heilen", correct: true },
+      { text: "Nur bestehende Produkte verkaufen", correct: false },
+      { text: "Gesundheitsdaten sammeln, ohne sie auszuwerten", correct: false },
+      { text: "Ausschließlich Krankenhäuser bauen", correct: false },
+    ],
+  },
+  {
+    question: "In welchen Bereichen forscht Roche unter anderem?",
+    answers: [
+      {
+        text: "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen",
+        correct: true,
+      },
+      { text: "Nur in der Raumfahrt", correct: false },
+      { text: "Ausschließlich in der Landwirtschaft", correct: false },
+      { text: "Nur in der Unterhaltungselektronik", correct: false },
+    ],
+  },
+  {
+    question: "Warum sind Diagnostik und Früherkennung wichtig?",
+    answers: [
+      {
+        text: "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden",
+        correct: true,
+      },
+      { text: "Damit Medikamente nicht geprüft werden müssen", correct: false },
+      { text: "Damit Forschung überflüssig wird", correct: false },
+      { text: "Nur um Papier zu sparen", correct: false },
+    ],
+  },
+  {
+    question: "Was bedeutet der kombinierte Ansatz von Roche?",
+    answers: [
+      {
+        text: "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patient:innen auszurichten",
+        correct: true,
+      },
+      { text: "Nur Medikamente ohne Tests zu entwickeln", correct: false },
+      { text: "Alle Produkte identisch zu machen", correct: false },
+      { text: "Forschung durch Werbung zu ersetzen", correct: false },
+    ],
+  },
+  {
+    question: "Was unterstützt laut Roche den langfristigen Erfolg?",
+    answers: [
+      {
+        text: "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit",
+        correct: true,
+      },
+      { text: "Stillstand und möglichst wenige Ideen", correct: false },
+      { text: "Arbeiten ohne Qualitätsstandards", correct: false },
+      { text: "Nur schnelle Entscheidungen ohne Prüfung", correct: false },
+    ],
+  },
+];
+
+function shuffle<T>(items: T[]) {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+function createQuiz() {
+  return shuffle(questions).map((question) => ({
+    ...question,
+    answers: shuffle(question.answers),
+  }));
+}
+
+const answerColors = ["blue", "coral", "yellow", "green"];
+const answerLetters = ["A", "B", "C", "D"];
+
+function formatDuration(elapsedMs: number) {
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+export default function Home() {
+  const [name, setName] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [quizQuestions, setQuizQuestions] = useState(() => createQuiz());
+  const [answersByQuestion, setAnswersByQuestion] = useState<(number | null)[]>([]);
+  const [leaderboard, setLeaderboard] = useState<QuizResult[]>([]);
+  const quizStartedAt = useRef<number | null>(null);
+  const resultId = useRef(0);
+  const finished = started && current >= quizQuestions.length;
+  const selected = answersByQuestion[current] ?? null;
+
+  const progress = useMemo(
+    () => ((current + (selected !== null ? 1 : 0)) / quizQuestions.length) * 100,
+    [current, selected, quizQuestions.length],
+  );
+
+  const score = useMemo(
+    () =>
+      answersByQuestion.reduce<number>(
+        (total, answerIndex, questionIndex) =>
+          total +
+          (answerIndex !== null &&
+          quizQuestions[questionIndex].answers[answerIndex].correct
+            ? 1
+            : 0),
+        0,
+      ),
+    [answersByQuestion, quizQuestions],
+  );
+
+  const question = quizQuestions[current];
+  const displayName = name.trim() || "Teilnehmer";
+
+  function startQuiz(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const username = String(formData.get("username") ?? "").trim();
+    if (!username) return;
+
+    setName(username);
+    setQuizQuestions(createQuiz());
+    setCurrent(0);
+    setAnswersByQuestion(Array(questions.length).fill(null));
+    quizStartedAt.current = performance.now();
+    event.currentTarget.reset();
+    setStarted(true);
+  }
+
+  function chooseAnswer(answerIndex: number) {
+    if (selected !== null) return;
+    setAnswersByQuestion((answers) =>
+      answers.map((answer, index) => (index === current ? answerIndex : answer)),
+    );
+  }
+
+  function previousQuestion() {
+    setCurrent((value) => Math.max(0, value - 1));
+  }
+
+  function nextQuestion() {
+    if (current === quizQuestions.length - 1 && quizStartedAt.current !== null) {
+      const result: QuizResult = {
+        id: resultId.current++,
+        name: displayName,
+        score,
+        total: quizQuestions.length,
+        elapsedMs: performance.now() - quizStartedAt.current,
+      };
+
+      setLeaderboard((entries) =>
+        [...entries, result].sort(
+          (first, second) =>
+            second.score - first.score || first.elapsedMs - second.elapsedMs,
+        ),
+      );
+    }
+
+    setCurrent((value) => value + 1);
+  }
+
+  function restart() {
+    setStarted(false);
+    setName("");
+    setCurrent(0);
+    setAnswersByQuestion([]);
+  }
+
+  return (
+    <main className={`site-shell${darkMode ? " dark-mode" : ""}`}>
+      <header className="topbar">
+        <div className="brand" aria-label="Roche">
+          <Image src="/roche-logo.png" alt="Roche" width={150} height={43} priority className="brand-logo-image" />
+          <span className="brand-divider" />
+          <span className="brand-subtitle">DIAGNOSTICS &amp; PHARMA</span>
+        </div>
+        <div className="header-note">
+          Wissenstest <span className="status-dot" />
+        </div>
+        <button
+          className="theme-toggle"
+          type="button"
+          onClick={() => setDarkMode((enabled) => !enabled)}
+          aria-label={darkMode ? "Hellen Modus einschalten" : "Dunklen Modus einschalten"}
+          aria-pressed={darkMode}
+        >
+          <span aria-hidden="true">{darkMode ? "☀" : "☾"}</span>
+          {darkMode ? "Hell" : "Dunkel"}
+        </button>
+      </header>
+
+      <section className="content-wrap">
+        {!started && (
+          <section className="intro-card">
+            <div className="intro-copy">
+              <p className="eyebrow">Roche Wissenstest</p>
+              <h1>
+                Doing now what patients <em>need next.</em>
+              </h1>
+              <p className="intro-text">
+                Wie gut kennst du Roche? Entdecke die Geschichte, Forschung und
+                Ideen hinter einem weltweit tätigen Gesundheitsunternehmen.
+              </p>
+              <div className="intro-meta">
+                <span>07 Fragen</span>
+              </div>
+            </div>
+
+            <form className="start-form" onSubmit={startQuiz}>
+              <label htmlFor="username">Benutzername</label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                placeholder="Benutzername eingeben"
+                maxLength={25}
+                autoComplete="username"
+                required
+              />
+              <button className="primary-button" type="submit">
+                Weiter zum Quiz <span aria-hidden="true">→</span>
+              </button>
+              <small>Demo-Eingabe: Die Daten werden nicht geprüft oder gespeichert.</small>
+            </form>
+
+            <div className="accent-shape accent-one" aria-hidden="true" />
+            <div className="accent-shape accent-two" aria-hidden="true" />
+            <div className="accent-shape accent-three" aria-hidden="true" />
+          </section>
+        )}
+
+        {started && !finished && (
+          <section className="quiz-card">
+            <div className="quiz-heading">
+              <div>
+                <p className="eyebrow">Roche Wissenstest · {name.trim()}</p>
+                <h1>Deine nächste Frage</h1>
+              </div>
+              <div className="question-count">
+                <strong>{String(current + 1).padStart(2, "0")}</strong>
+                <span>/ {String(quizQuestions.length).padStart(2, "0")}</span>
+              </div>
+            </div>
+
+            <div
+              className="progress-track"
+              aria-label={`Fortschritt: ${Math.round(progress)} Prozent`}
+            >
+              <span style={{ width: `${progress}%` }} />
+            </div>
+
+            <p className="question-text">{question.question}</p>
+
+            <div className="answers" role="group" aria-label="Antwortmöglichkeiten">
+              {question.answers.map((answer, index) => {
+                const isSelected = selected === index;
+                const isCorrect = question.answers[index].correct;
+                const stateClass =
+                  selected === null
+                    ? ""
+                    : isCorrect
+                      ? "correct"
+                      : isSelected
+                        ? "wrong"
+                        : "muted";
+
+                return (
+                  <button
+                    key={answer.text}
+                    className={`answer answer-${answerColors[index]} ${stateClass}`}
+                    onClick={() => chooseAnswer(index)}
+                    disabled={selected !== null}
+                    type="button"
+                  >
+                    <span className="answer-letter">{answerLetters[index]}</span>
+                    <span>{answer.text}</span>
+                    {selected !== null && isCorrect && (
+                      <span className="answer-icon">✓</span>
+                    )}
+                    {selected !== null && isSelected && !isCorrect && (
+                      <span className="answer-icon">×</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="quiz-footer">
+              <span>
+                {selected === null
+                  ? "Wähle eine Antwort aus"
+                  : question.answers[selected].correct
+                    ? "Richtig! Stark gemacht."
+                    : "Nicht ganz – die markierte Antwort ist richtig."}
+              </span>
+              <div className="quiz-navigation">
+                {current > 0 && (
+                  <button className="previous-button" onClick={previousQuestion} type="button">
+                    <span aria-hidden="true">←</span> Zurück
+                  </button>
+                )}
+                {selected !== null && (
+                  <button className="next-button" onClick={nextQuestion} type="button">
+                    {current === quizQuestions.length - 1 ? "Ergebnis ansehen" : "Nächste Frage"}{" "}
+                    <span aria-hidden="true">→</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {finished && (
+          <section className="result-card">
+            <p className="eyebrow">Wissenstest abgeschlossen</p>
+            <div className="score-summary">
+              <strong>
+                {score}
+                <small>/ {quizQuestions.length}</small>
+              </strong>
+              <span>richtige Antworten</span>
+            </div>
+            <h1>Danke, {displayName}!</h1>
+            <p className="result-copy">
+              Du hast {score} von {quizQuestions.length} Roche-Fragen richtig beantwortet.
+            </p>
+            <p className={`result-status ${score >= 4 ? "passed" : "failed"}`} role="status">
+              {score >= 4 ? "Bestanden!" : "Nicht bestanden"}
+              <span> (mindestens 4 richtige Antworten erforderlich)</span>
+            </p>
+            <div className={`result-extras${score === quizQuestions.length ? " perfect-score" : ""}`}>
+              <section className="leaderboard" aria-labelledby="leaderboard-title">
+                <h2 id="leaderboard-title">Rangliste dieser Sitzung</h2>
+                <div className="leaderboard-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Platz</th>
+                        <th scope="col">Name</th>
+                        <th scope="col">Richtig</th>
+                        <th scope="col">Zeit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {leaderboard.map((entry, index) => (
+                        <tr key={entry.id}>
+                          <td>{index + 1}</td>
+                          <td>{entry.name}</td>
+                          <td>{entry.score} / {entry.total}</td>
+                          <td>{formatDuration(entry.elapsedMs)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p>Sortiert nach richtigen Antworten und danach nach kürzester Zeit.</p>
+              </section>
+              {score === quizQuestions.length && (
+                <aside className="perfect-celebration" aria-label="Perfekte Punktzahl erreicht">
+                  <div className="celebration-medal" aria-hidden="true">★</div>
+                  <p>Perfekt!</p>
+                  <span>Volle Punktzahl</span>
+                  <div className="celebration-sparkles" aria-hidden="true">
+                    <i>✦</i><i>✧</i><i>✦</i><i>✧</i><i>✦</i>
+                  </div>
+                </aside>
+              )}
+            </div>
+            <div className="score-dots" aria-label={`${score} von ${quizQuestions.length} Fragen richtig`}>
+              {quizQuestions.map((item, index) => (
+                <span key={item.question} className={index < score ? "filled" : ""} />
+              ))}
+            </div>
+            <button className="primary-button" onClick={restart} type="button">
+              Nochmal starten <span aria-hidden="true">↻</span>
+            </button>
+          </section>
+        )}
+      </section>
+
+      <footer className="page-footer">
+        <span>Roche Wissenstest</span>
+        <a href="https://www.roche.com" target="_blank" rel="noreferrer">
+          roche.com ↗
+        </a>
+        <span>Doing now what patients need next.</span>
+      </footer>
+    </main>
+  );
+}
