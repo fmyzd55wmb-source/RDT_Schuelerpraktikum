@@ -1,0 +1,145 @@
+"use client";
+
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+type Answer = { text: string; correct: boolean };
+type Question = { question: string; answers: Answer[] };
+type QuizResult = { id: string; name: string; correct: number; total: number; percentage: number; durationMs: number; completedAt: string; rank: number; achievements?: string[] };
+type ActiveQuiz = { name: string; questions: Question[]; current: number; score: number; selected: number | null; startedAt: number };
+
+const questions: Question[] = [
+  { question: "Wann und wo wurde Roche gegründet?", answers: [{ text: "1896 in der Schweiz", correct: true }, { text: "1925 in Deutschland", correct: false }, { text: "2001 in den USA", correct: false }, { text: "1880 in Frankreich", correct: false }] },
+  { question: "Welche beiden Bereiche bilden das Roche-Geschäft?", answers: [{ text: "Diagnostik und Pharma", correct: true }, { text: "Tourismus und Logistik", correct: false }, { text: "Software und Bauwesen", correct: false }, { text: "Ernährung und Sport", correct: false }] },
+  { question: "Was möchte Roche für Patient:innen erreichen?", answers: [{ text: "Krankheiten verhindern, stoppen und heilen", correct: true }, { text: "Nur bestehende Produkte verkaufen", correct: false }, { text: "Gesundheitsdaten sammeln, ohne sie auszuwerten", correct: false }, { text: "Ausschließlich Krankenhäuser bauen", correct: false }] },
+  { question: "In welchen Bereichen forscht Roche unter anderem?", answers: [{ text: "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen", correct: true }, { text: "Nur in der Raumfahrt", correct: false }, { text: "Ausschließlich in der Landwirtschaft", correct: false }, { text: "Nur in der Unterhaltungselektronik", correct: false }] },
+  { question: "Warum sind Diagnostik und Früherkennung wichtig?", answers: [{ text: "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden", correct: true }, { text: "Damit Medikamente nicht geprüft werden müssen", correct: false }, { text: "Damit Forschung überflüssig wird", correct: false }, { text: "Nur um Papier zu sparen", correct: false }] },
+  { question: "Was bedeutet der kombinierte Ansatz von Roche?", answers: [{ text: "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patient:innen auszurichten", correct: true }, { text: "Nur Medikamente ohne Tests zu entwickeln", correct: false }, { text: "Alle Produkte identisch zu machen", correct: false }, { text: "Forschung durch Werbung zu ersetzen", correct: false }] },
+  { question: "Was unterstützt laut Roche den langfristigen Erfolg?", answers: [{ text: "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit", correct: true }, { text: "Stillstand und möglichst wenige Ideen", correct: false }, { text: "Arbeiten ohne Qualitätsstandards", correct: false }, { text: "Nur schnelle Entscheidungen ohne Prüfung", correct: false }] },
+];
+const answerColors = ["blue", "coral", "yellow", "green"];
+const answerLetters = ["A", "B", "C", "D"];
+const RESULTS_KEY = "roche-quiz-results-v1";
+const ACTIVE_KEY = "roche-quiz-active-v1";
+const CELEBRATED_KEY = "roche-quiz-celebrated-v1";
+const PATRICK_SOURCE = "/assets/patrick-source.png";
+const SOUND_SETTINGS_KEY = "roche-quiz-sound-v1";
+type SoundName = "countdown" | "go" | "correct" | "incorrect" | "transition" | "champion" | "rank2" | "rank3" | "achievement";
+type SoundSettings = { volume: number; muted: boolean };
+
+function useSoundEffects() {
+  const audioRef = useRef<AudioContext | null>(null);
+  const soundSettingsHydrated = useRef(false);
+  const [settings, setSettings] = useState<SoundSettings>({ volume: 0.35, muted: false });
+  useEffect(() => { try { const stored = window.localStorage.getItem(SOUND_SETTINGS_KEY); if (stored) { const parsed = JSON.parse(stored) as Partial<SoundSettings>; setSettings({ volume: typeof parsed.volume === "number" ? Math.min(1, Math.max(0, parsed.volume)) : 0.35, muted: parsed.muted === true }); } } catch { /* Sound preferences are optional. */ } soundSettingsHydrated.current = true; }, []);
+  useEffect(() => { if (!soundSettingsHydrated.current) return; try { window.localStorage.setItem(SOUND_SETTINGS_KEY, JSON.stringify(settings)); } catch { /* Storage may be unavailable. */ } }, [settings]);
+  const getContext = useCallback(() => {
+    if (audioRef.current) return audioRef.current;
+    try {
+      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return null;
+      audioRef.current = new AudioContextClass();
+      return audioRef.current;
+    } catch { return null; }
+  }, []);
+  const unlock = useCallback(() => { const context = getContext(); if (context?.state === "suspended") void context.resume().catch(() => undefined); }, [getContext]);
+  const play = useCallback((name: SoundName) => {
+    if (settings.muted || settings.volume <= 0 || typeof window === "undefined") return;
+    const context = getContext(); if (!context) return;
+    if (context.state === "suspended") void context.resume().catch(() => undefined);
+    try {
+      const now = context.currentTime;
+      const tone = (frequency: number, duration: number, offset: number, type: OscillatorType = "sine", level = 0.18) => {
+        const oscillator = context.createOscillator(); const gain = context.createGain();
+        oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, now + offset);
+        gain.gain.setValueAtTime(0.0001, now + offset); gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, level * settings.volume), now + offset + 0.015); gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + duration);
+        oscillator.connect(gain); gain.connect(context.destination); oscillator.start(now + offset); oscillator.stop(now + offset + duration + 0.02);
+      };
+      if (name === "countdown") tone(520, 0.18, 0, "sine", 0.2);
+      if (name === "go") { tone(523, 0.18, 0, "triangle", 0.2); tone(659, 0.22, 0.12, "triangle", 0.2); tone(784, 0.28, 0.25, "triangle", 0.2); }
+      if (name === "correct") { tone(523, 0.16, 0, "sine"); tone(659, 0.2, 0.1, "sine"); tone(784, 0.28, 0.2, "sine"); }
+      if (name === "incorrect") { tone(220, 0.22, 0, "square", 0.12); tone(165, 0.28, 0.16, "sawtooth", 0.1); }
+      if (name === "transition") { tone(330, 0.12, 0, "triangle", 0.09); tone(440, 0.16, 0.08, "triangle", 0.08); }
+      if (name === "champion") { tone(523, 0.18, 0, "triangle"); tone(659, 0.18, 0.13, "triangle"); tone(784, 0.18, 0.26, "triangle"); tone(1047, 0.45, 0.39, "triangle", 0.2); }
+      if (name === "rank2") { tone(440, 0.18, 0, "triangle"); tone(554, 0.18, 0.14, "triangle"); tone(659, 0.35, 0.28, "triangle"); }
+      if (name === "rank3") { tone(392, 0.18, 0, "triangle"); tone(494, 0.18, 0.14, "triangle"); tone(587, 0.3, 0.28, "triangle"); }
+      if (name === "achievement") { tone(784, 0.15, 0, "sine"); tone(988, 0.15, 0.12, "sine"); tone(1175, 0.32, 0.24, "sine"); }
+    } catch { /* Audio is optional and must never interrupt the quiz. */ }
+  }, [getContext, settings.muted, settings.volume]);
+  return { settings, setSettings, unlock, play };
+}
+
+function shuffle<T>(items: T[]) { return [...items].sort(() => Math.random() - 0.5); }
+function createQuiz() { return shuffle(questions).map((question) => ({ ...question, answers: shuffle(question.answers) })); }
+function normalizeName(value: string) { return value.trim().toLocaleLowerCase("de-DE"); }
+function readResults(): QuizResult[] { try { const value = window.localStorage.getItem(RESULTS_KEY); return value ? JSON.parse(value) : []; } catch { return []; } }
+function readActiveQuiz(): ActiveQuiz | null { try { const value = window.localStorage.getItem(ACTIVE_KEY); return value ? JSON.parse(value) : null; } catch { return null; } }
+function sortResults(items: QuizResult[]) { return [...items].sort((a, b) => b.correct - a.correct || a.durationMs - b.durationMs || new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()); }
+function formatDuration(milliseconds: number) { const centiseconds = Math.floor(Math.max(0, milliseconds) / 10); return `${String(Math.floor(centiseconds / 6000)).padStart(2, "0")}:${String(Math.floor(centiseconds / 100) % 60).padStart(2, "0")}.${String(centiseconds % 100).padStart(2, "0")}`; }
+function achievementIds(result: QuizResult) {
+  const ids: string[] = [];
+  if (result.rank === 1) ids.push("champion"); else if (result.rank === 2) ids.push("silver"); else if (result.rank === 3) ids.push("bronze");
+  if (result.correct === result.total) ids.push("perfect");
+  if (result.percentage >= 70) ids.push("expert");
+  if (result.durationMs <= 30000) ids.push("quick");
+  return ids.length ? ids : ["first-step"];
+}
+const achievementLabels: Record<string, string> = { champion: "Roche Champion", silver: "Silber-Platz", bronze: "Bronze-Platz", perfect: "Perfekte Runde", expert: "Roche-Kenner:in", quick: "Blitzrunde", "first-step": "Erster Schritt" };
+function achievementsFor(result: QuizResult) { return achievementIds(result).map((id) => achievementLabels[id] ?? id); }
+function rankClass(rank: number, total: number) { return rank === 1 ? "rank-state-1" : rank === 2 ? "rank-state-2" : rank === 3 ? "rank-state-3" : rank === total && total > 3 ? "rank-state-last" : "rank-state-other"; }
+function rankMessage(rank: number) { return rank === 1 ? "Du hast den ersten Platz erobert!" : rank === 2 ? "Ganz knapp am Champion vorbei – stark!" : rank === 3 ? "Du bist auf dem Podium gelandet!" : "Dein Ergebnis ist gespeichert – weiter so!"; }
+
+export default function Home() {
+  const [name, setName] = useState(""); const [started, setStarted] = useState(false); const [showResults, setShowResults] = useState(false); const [countdown, setCountdown] = useState<number | "LOS" | null>(null);
+  const [current, setCurrent] = useState(0); const [score, setScore] = useState(0); const [selected, setSelected] = useState<number | null>(null); const [quizQuestions, setQuizQuestions] = useState(() => createQuiz()); const [startedAt, setStartedAt] = useState<number | null>(null); const [elapsed, setElapsed] = useState(0);
+  const [results, setResults] = useState<QuizResult[]>([]); const [savedResult, setSavedResult] = useState<QuizResult | null>(null); const [startError, setStartError] = useState(""); const [hydrated, setHydrated] = useState(false); const [shouldCelebrate, setShouldCelebrate] = useState(false);
+  const { settings: soundSettings, setSettings: setSoundSettings, unlock, play } = useSoundEffects();
+  const countdownSoundRef = useRef<number | string | null>(null);
+  const finished = started && current >= quizQuestions.length;
+  const progress = useMemo(() => ((current + (selected !== null ? 1 : 0)) / quizQuestions.length) * 100, [current, selected, quizQuestions.length]);
+
+  useEffect(() => { setResults(readResults()); const active = readActiveQuiz(); if (active) { setName(active.name); setStarted(true); setCurrent(active.current); setScore(active.score); setSelected(active.selected); setQuizQuestions(active.questions); setStartedAt(active.startedAt); setElapsed(Date.now() - active.startedAt); } setHydrated(true); }, []);
+  useEffect(() => { if (countdown === null) { countdownSoundRef.current = null; return; } if (countdownSoundRef.current !== countdown) { countdownSoundRef.current = countdown; play(countdown === "LOS" ? "go" : "countdown"); } const timer = window.setTimeout(() => countdown === "LOS" ? (setStartedAt(Date.now()), setElapsed(0), setStarted(true), setCountdown(null)) : setCountdown(countdown === 1 ? "LOS" : countdown - 1), countdown === "LOS" ? 500 : 700); return () => window.clearTimeout(timer); }, [countdown, play]);
+  useEffect(() => { if (!hydrated || !started || !startedAt || finished) return; const timer = window.setInterval(() => setElapsed(Date.now() - startedAt), 25); return () => window.clearInterval(timer); }, [hydrated, started, startedAt, finished]);
+  useEffect(() => {
+    if (!hydrated || !started || !finished || savedResult) return;
+    const result: QuizResult = { id: `${Date.now()}-${name.trim()}`, name: name.trim(), correct: score, total: quizQuestions.length, percentage: Math.round((score / quizQuestions.length) * 100), durationMs: startedAt ? Date.now() - startedAt : elapsed, completedAt: new Date().toISOString(), rank: 0 };
+    const nextResults = sortResults([...results.filter((item) => normalizeName(item.name) !== normalizeName(result.name)), result]).map((item, index) => ({ ...item, rank: index + 1, achievements: achievementIds({ ...item, rank: index + 1 }) }));
+    const saved = nextResults.find((item) => item.id === result.id) ?? result;
+    const previousTop = sortResults(results)[0];
+    const newRecord = !previousTop || sortResults([previousTop, saved])[0].id === saved.id;
+    const knownAchievements = new Set(results.flatMap((item) => achievementIds(item)));
+    const unlockedAchievement = achievementIds(saved).some((id) => !knownAchievements.has(id));
+    play(saved.rank === 1 ? "champion" : saved.rank === 2 ? "rank2" : saved.rank === 3 ? "rank3" : "transition");
+    if (newRecord || unlockedAchievement) window.setTimeout(() => play("achievement"), 550);
+    window.localStorage.setItem(RESULTS_KEY, JSON.stringify(nextResults)); window.localStorage.removeItem(ACTIVE_KEY);
+    const celebrated = window.localStorage.getItem(CELEBRATED_KEY); if (celebrated !== saved.id) { setShouldCelebrate(true); window.localStorage.setItem(CELEBRATED_KEY, saved.id); }
+    setResults(nextResults); setSavedResult(saved);
+  }, [hydrated, started, finished, savedResult, name, score, quizQuestions.length, startedAt, elapsed, results, play]);
+  useEffect(() => { if (!hydrated || !started || finished || !startedAt) return; window.localStorage.setItem(ACTIVE_KEY, JSON.stringify({ name, questions: quizQuestions, current, score, selected, startedAt } satisfies ActiveQuiz)); }, [hydrated, started, finished, name, quizQuestions, current, score, selected, startedAt]);
+
+  function startQuiz(event: React.FormEvent) { event.preventDefault(); unlock(); const trimmedName = name.trim(); if (!trimmedName) return; if (results.some((item) => normalizeName(item.name) === normalizeName(trimmedName))) { setStartError("Dieser Name hat bereits teilgenommen."); return; } setName(trimmedName); setQuizQuestions(createQuiz()); setCurrent(0); setScore(0); setSelected(null); setSavedResult(null); setShouldCelebrate(false); setStartError(""); setShowResults(false); setCountdown(3); }
+  function chooseAnswer(answerIndex: number) { if (selected !== null) return; unlock(); const correct = quizQuestions[current].answers[answerIndex].correct; play(correct ? "correct" : "incorrect"); setSelected(answerIndex); if (correct) setScore((value) => value + 1); }
+  function nextQuestion() { unlock(); play("transition"); setSelected(null); setCurrent((value) => value + 1); }
+
+  if (!hydrated) return null; const ranking = sortResults(results); const question = quizQuestions[current];
+  return <main className="site-shell"><header className="topbar"><div className="brand" aria-label="Roche"><Image className="roche-logo" src="/roche-logo.png" alt="Roche" width={150} height={43} priority /><span className="brand-divider" /><span className="brand-subtitle">DIAGNOSTICS &amp; PHARMA</span></div><div className="topbar-actions"><span className="header-note">Wissenstest <span className="status-dot" /></span><div className="sound-controls" aria-label="Ton-Einstellungen"><button className="mute-button" type="button" onClick={() => { unlock(); setSoundSettings((value) => ({ ...value, muted: !value.muted })); }} aria-pressed={soundSettings.muted} aria-label={soundSettings.muted ? "Ton einschalten" : "Ton ausschalten"}>{soundSettings.muted ? "🔇" : "🔊"}</button><label htmlFor="volume">Lautstärke</label><input id="volume" type="range" min="0" max="1" step="0.05" value={soundSettings.volume} onChange={(event) => { unlock(); setSoundSettings((value) => ({ ...value, volume: Number(event.target.value) })); }} /></div><button className="results-tab" onClick={() => { unlock(); play("transition"); setShowResults(true); setStarted(false); setCountdown(null); }} aria-pressed={showResults}>Meine Ergebnisse</button></div></header>
+    <section className="content-wrap">
+      {countdown !== null && <section className="countdown-card" aria-live="assertive"><p className="eyebrow">Bereit?</p><strong>{countdown === "LOS" ? "LOS!" : countdown}</strong><span>Dein Wissenstest startet gleich.</span></section>}
+      {showResults && countdown === null && <ResultsView results={ranking} onBack={() => setShowResults(false)} />}
+      {!started && !showResults && countdown === null && <section className="intro-card"><div className="intro-copy"><p className="eyebrow">Roche Wissenstest</p><h1>Doing now what patients <em>need next.</em></h1><p className="intro-text">Wie gut kennst du Roche? Entdecke die Geschichte, Forschung und Ideen hinter einem weltweit tätigen Gesundheitsunternehmen.</p><div className="intro-meta"><span>07 Fragen</span><span>·</span><span>ca. 1 Minute</span></div></div><form className="start-form" onSubmit={startQuiz}><label htmlFor="name">Wie heißt du?</label><input id="name" type="text" value={name} onChange={(event) => { setName(event.target.value); setStartError(""); }} placeholder="Dein Vorname" maxLength={40} autoComplete="given-name" required /><button className="primary-button" type="submit">Test starten <span aria-hidden="true">→</span></button>{startError ? <small className="form-error">{startError}</small> : <small>Keine Anmeldung nötig.</small>}</form><div className="accent-shape accent-one" aria-hidden="true" /><div className="accent-shape accent-two" aria-hidden="true" /><div className="accent-shape accent-three" aria-hidden="true" /></section>}
+      {started && !finished && question && <section className="quiz-card"><div className="quiz-heading"><div><p className="eyebrow">Roche Wissenstest · {name}</p><h1>Deine nächste Frage</h1></div><div className="question-count"><strong>{String(current + 1).padStart(2, "0")}</strong><span>/ {String(quizQuestions.length).padStart(2, "0")}</span></div></div><div className="quiz-status"><span className="live-timer" aria-label={`Vergangene Zeit ${formatDuration(elapsed)}`}>Zeit {formatDuration(elapsed)}</span></div><div className="progress-track" aria-label={`Fortschritt: ${Math.round(progress)} Prozent`}><span style={{ width: `${progress}%` }} /></div><p className="question-text">{question.question}</p><div className="answers" role="group" aria-label="Antwortmöglichkeiten">{question.answers.map((answer, index) => { const isSelected = selected === index; const stateClass = selected === null ? "" : answer.correct ? "correct" : isSelected ? "wrong" : "muted"; return <button key={answer.text} className={`answer answer-${answerColors[index]} ${stateClass}`} onClick={() => chooseAnswer(index)} disabled={selected !== null}><span className="answer-letter">{answerLetters[index]}</span><span>{answer.text}</span>{selected !== null && answer.correct && <span className="answer-icon">✓</span>}{selected !== null && isSelected && !answer.correct && <span className="answer-icon">×</span>}</button>; })}</div><div className="quiz-footer"><span>{selected === null ? "Wähle eine Antwort aus" : question.answers[selected].correct ? "Richtig! Stark gemacht." : "Nicht ganz – die markierte Antwort ist richtig."}</span>{selected !== null && <button className="next-button" onClick={nextQuestion}>{current === quizQuestions.length - 1 ? "Ergebnis" : "Nächste Frage"}<span>→</span></button>}</div></section>}
+      {finished && savedResult && <ResultCard result={savedResult} ranking={ranking} quizQuestions={quizQuestions} celebrate={shouldCelebrate} />}
+    </section><footer className="page-footer"><span>Roche Wissenstest</span><a href="https://www.roche.com" target="_blank" rel="noreferrer">roche.com ↗</a><span>Doing now what patients need next.</span></footer></main>;
+}
+
+function ResultCard({ result, ranking, quizQuestions, celebrate }: { result: QuizResult; ranking: QuizResult[]; quizQuestions: Question[]; celebrate: boolean }) {
+  const [visibleScore, setVisibleScore] = useState(0);
+  const [showPatrick, setShowPatrick] = useState(false);
+  useEffect(() => { if (celebrate && result.rank === 1) { setShowPatrick(true); const timer = window.setTimeout(() => setShowPatrick(false), 10000); return () => window.clearTimeout(timer); } setShowPatrick(false); }, [celebrate, result.rank]);
+  useEffect(() => { const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches; if (reducedMotion || !celebrate) { setVisibleScore(result.correct); return; } let frame = 0; const started = performance.now(); const tick = (now: number) => { const progress = Math.min(1, (now - started) / 850); setVisibleScore(Math.round(result.correct * progress)); if (progress < 1) frame = requestAnimationFrame(tick); }; frame = requestAnimationFrame(tick); return () => cancelAnimationFrame(frame); }, [result.correct, celebrate]);
+  const labels = achievementsFor(result);
+  return <section className={`result-card ${rankClass(result.rank, ranking.length)} ${celebrate ? "celebration-active" : ""}`}><div className="result-particles" aria-hidden="true">{Array.from({ length: 22 }, (_, index) => <i key={index} style={{ "--particle-index": index } as React.CSSProperties} />)}</div>{showPatrick && <div className="patrick-celebration" aria-label="Patrick gratuliert zum ersten Platz"><Image src={PATRICK_SOURCE} alt="Patrick zeigt Daumen hoch" width={320} height={240} /></div>}<p className="eyebrow">Wissenstest abgeschlossen</p><div className="score-summary"><strong aria-live="polite">{visibleScore}<small>/ {result.total}</small></strong><span>richtige Antworten · {result.percentage}%</span></div><h1>Danke, {result.name}!</h1><p className="result-copy"><strong>{rankMessage(result.rank)}</strong><br />Deine Zeit: <strong className="time-emphasis">{formatDuration(result.durationMs)}</strong></p><div className="achievement-badges" aria-label="Deine Abzeichen">{labels.map((label) => <span key={label}>✦ {label}</span>)}</div><p className="rank-detail">Dein aktueller Rang: <strong className="rank-emphasis">#{result.rank}</strong> von {ranking.length}</p><div className="score-dots" aria-label={`${result.correct} von ${result.total} Fragen richtig`}>{quizQuestions.map((item, index) => <span key={item.question} className={index < result.correct ? "filled" : ""} />)}</div><Leaderboard results={ranking} currentId={result.id} /></section>;
+}
+function ResultsView({ results, onBack }: { results: QuizResult[]; onBack: () => void }) { return <section className="results-card"><div className="results-view-heading"><div><p className="eyebrow">Nur auf diesem Gerät</p><h1>Meine Ergebnisse</h1></div><button className="next-button" onClick={onBack}>Zum Quiz <span>→</span></button></div>{results.length === 0 ? <p className="result-copy">Noch keine Ergebnisse gespeichert.</p> : <Leaderboard results={results} currentId="" />}<p className="storage-note">Ergebnisse und die Begrenzung auf einen Versuch pro Name werden nur in diesem Browser gespeichert. Eine Übertragung an externe Dienste findet nicht statt.</p></section>; }
+function Leaderboard({ results, currentId }: { results: QuizResult[]; currentId: string }) { return <section className="leaderboard" aria-labelledby="leaderboard-heading"><div className="leaderboard-heading"><p className="eyebrow">Roche Rangliste</p><h2 id="leaderboard-heading">Die besten Ergebnisse</h2><span className="leaderboard-trophy" aria-label="Pokal für den Champion">🏆</span></div><ol>{results.map((result) => <li key={result.id} className={`${rankClass(result.rank, results.length)} ${result.id === currentId ? "current-result" : ""}`}><span className="rank-number" aria-label={`Rang ${result.rank}`}>{result.rank <= 3 ? ["🥇", "🥈", "🥉"][result.rank - 1] : result.rank}</span><span className="rank-name">{result.name}</span><span className="score-emphasis">{result.correct}/{result.total}</span><time>{formatDuration(result.durationMs)}</time><span className="achievement-mini">{achievementsFor(result)[0]}</span></li>)}</ol></section>; }
