@@ -1,0 +1,500 @@
+"use client";
+
+import Image from "next/image";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+
+// Schlüssel für die Namensliste im lokalen Browser-Speicher.
+const USED_NAMES_KEY = "roche-quiz-used-names";
+
+// Eine Antwort enthält den sichtbaren Text und die Information, ob sie richtig ist.
+type Answer = { text: string; correct: boolean };
+// Eine Frage besteht aus dem Fragetext und vier Antwortmöglichkeiten.
+type Question = { question: string; answers: Answer[]; inputType?: "estimate" };
+type QuizResult = { id: string; name: string; quiz: "roche" | "medication" | "overall"; correct: number; total: number; percentage: number; completedAt: string; durationMs: number | null; attempts: number; rank: number };
+type RankingScope = "overall" | "roche" | "medication";
+
+const RESULTS_KEY = "roche-quiz-results-v1";
+
+const medicationQuestions: Question[] = [
+  { question: "Was ist der Wirkstoff eines Medikaments?", answers: [{ text: "Der Bestandteil, der im Körper die gewünschte Wirkung auslöst", correct: true }, { text: "Die Farbe der Verpackung", correct: false }, { text: "Der Name der Apotheke", correct: false }, { text: "Die Größe der Tablette", correct: false }] },
+  { question: "Warum werden Medikamente in klinischen Studien geprüft?", answers: [{ text: "Um Wirkung und Sicherheit mit Menschen zu untersuchen", correct: true }, { text: "Um die Verpackung zu testen", correct: false }, { text: "Um Werbung zu ersetzen", correct: false }, { text: "Um Forschung zu vermeiden", correct: false }] },
+  { question: "Wahr oder falsch: Eine personalisierte Behandlung kann Diagnostik nutzen, um eine Therapie besser auf eine Person abzustimmen.", answers: [{ text: "Wahr", correct: true }, { text: "Falsch", correct: false }] },
+  { question: "Was sollte man bei der Einnahme eines Medikaments beachten?", answers: [{ text: "Die Hinweise von Ärztinnen, Ärzten oder der Packungsbeilage beachten", correct: true }, { text: "Die Dosis nach Gefühl verdoppeln", correct: false }, { text: "Medikamente mit anderen teilen", correct: false }, { text: "Die Einnahme einfach selbstständig abbrechen", correct: false }] },
+  { question: "Welches Roche-Medikament ist unter anderem für Multiple Sklerose bekannt?", answers: [{ text: "Ocrevus", correct: true }, { text: "Aspirin", correct: false }, { text: "Insulin glargin", correct: false }, { text: "Penicillin", correct: false }] },
+  { question: "Welche Rolle spielt die Diagnostik bei modernen Therapien?", answers: [{ text: "Sie kann helfen, die passende Therapie für eine Person zu finden", correct: true }, { text: "Sie macht klinische Studien überflüssig", correct: false }, { text: "Sie ersetzt jede ärztliche Beratung", correct: false }, { text: "Sie bestimmt nur die Farbe eines Medikaments", correct: false }] },
+  { question: "Schätzfrage: Wie viele Medikamenten-Packungen produziert Roche ungefähr pro Jahr und wie hoch ist der weltweite Umsatz durch den Verkauf ungefähr?", answers: [], inputType: "estimate" },
+];
+
+// Feste Fragenbasis des Wissenstests.
+const sourceQuestions: Question[] = [
+  { question: "Wann und wo wurde Roche gegründet?", answers: [{ text: "1896 in der Schweiz", correct: true }, { text: "1925 in Deutschland", correct: false }, { text: "2001 in den USA", correct: false }, { text: "1880 in Frankreich", correct: false }] },
+  { question: "Welche beiden Bereiche bilden das Roche-Geschäft?", answers: [{ text: "Diagnostik und Pharma", correct: true }, { text: "Tourismus und Logistik", correct: false }, { text: "Software und Bauwesen", correct: false }, { text: "Ernährung und Sport", correct: false }] },
+  { question: "Was möchte Roche für Patientinnen und Patienten erreichen?", answers: [{ text: "Krankheiten verhindern, stoppen und heilen", correct: true }, { text: "Nur bestehende Produkte verkaufen", correct: false }, { text: "Gesundheitsdaten sammeln, ohne sie auszuwerten", correct: false }, { text: "Ausschließlich Krankenhäuser bauen", correct: false }] },
+  { question: "In welchen Bereichen forscht Roche unter anderem?", answers: [{ text: "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen", correct: true }, { text: "Nur in der Raumfahrt", correct: false }, { text: "Ausschließlich in der Landwirtschaft", correct: false }, { text: "Nur in der Unterhaltungselektronik", correct: false }] },
+  { question: "Warum sind Diagnostik und Früherkennung wichtig?", answers: [{ text: "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden", correct: true }, { text: "Damit Medikamente nicht geprüft werden müssen", correct: false }, { text: "Damit Forschung überflüssig wird", correct: false }, { text: "Nur um Papier zu sparen", correct: false }] },
+  { question: "Was bedeutet der kombinierte Ansatz von Roche?", answers: [{ text: "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patientinnen und Patienten auszurichten", correct: true }, { text: "Nur Medikamente ohne Tests zu entwickeln", correct: false }, { text: "Alle Produkte identisch zu machen", correct: false }, { text: "Forschung durch Werbung zu ersetzen", correct: false }] },
+  { question: "Was unterstützt laut Roche den langfristigen Erfolg?", answers: [{ text: "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit", correct: true }, { text: "Stillstand und möglichst wenige Ideen", correct: false }, { text: "Arbeiten ohne Qualitätsstandards", correct: false }, { text: "Nur schnelle Entscheidungen ohne Prüfung", correct: false }] },
+];
+
+// Mischt eine Liste, ohne das ursprüngliche Array zu verändern.
+function shuffle<T>(items: T[]) {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+// Setzt die Gründungsfrage an die erste Stelle und mischt den Rest.
+function createQuiz(questionSet: Question[] = sourceQuestions, keepFirst = questionSet === sourceQuestions) {
+  const orderedQuestions = keepFirst ? [questionSet[0], ...shuffle(questionSet.slice(1))] : shuffle(questionSet);
+
+  return orderedQuestions.map((question) => ({
+    ...question,
+    answers: shuffle(question.answers),
+  }));
+}
+
+// Liest bereits verwendete Namen aus localStorage; beim ersten Laden gibt es eine leere Liste.
+function getStoredNames(): string[] {
+  if (typeof window === "undefined") return [];
+  const savedNames = window.localStorage.getItem(USED_NAMES_KEY);
+  if (!savedNames) return [];
+
+  try {
+    const names = JSON.parse(savedNames);
+    return Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : [];
+  } catch {
+    window.localStorage.removeItem(USED_NAMES_KEY);
+    return [];
+  }
+}
+
+function readResults(): QuizResult[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const savedResults = window.localStorage.getItem(RESULTS_KEY);
+    const parsed = savedResults ? JSON.parse(savedResults) : [];
+    return Array.isArray(parsed) ? parsed.filter((result): result is QuizResult => result && typeof result.name === "string" && typeof result.correct === "number").map((result) => ({ ...result, quiz: result.quiz === "medication" ? "medication" : "roche", durationMs: typeof result.durationMs === "number" ? result.durationMs : null, attempts: typeof result.attempts === "number" ? result.attempts : 1 })) : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeName(value: string): string {
+  return value.trim().toLocaleLowerCase("de-DE");
+}
+
+function sortResults(results: QuizResult[]): QuizResult[] {
+  return [...results].sort((first, second) => second.correct - first.correct || (first.durationMs ?? Number.MAX_SAFE_INTEGER) - (second.durationMs ?? Number.MAX_SAFE_INTEGER) || new Date(first.completedAt).getTime() - new Date(second.completedAt).getTime());
+}
+
+function formatDuration(durationMs: number | null): string {
+  if (durationMs === null) return "—";
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds} min`;
+}
+
+function rankResults(results: QuizResult[]): QuizResult[] {
+  return sortResults(results).map((result, index) => ({ ...result, rank: index + 1 }));
+}
+
+function buildOverallResults(results: QuizResult[]): QuizResult[] {
+  const grouped = new Map<string, QuizResult[]>();
+  results.filter((result) => result.quiz !== "overall").forEach((result) => {
+    const key = normalizeName(result.name);
+    grouped.set(key, [...(grouped.get(key) ?? []), result]);
+  });
+
+  return Array.from(grouped.values()).map((entries) => {
+    const first = entries[0];
+    const totalCorrect = entries.reduce((sum, entry) => sum + entry.correct, 0);
+    const totalTime = entries.reduce((sum, entry) => sum + (entry.durationMs ?? 0), 0);
+    const totalAttempts = entries.reduce((sum, entry) => sum + entry.attempts, 0);
+    return {
+      id: `overall-${normalizeName(first.name)}`,
+      name: first.name,
+      quiz: "overall",
+      correct: totalCorrect,
+      total: sourceQuestions.length + medicationQuestions.length,
+      percentage: Math.round((totalCorrect / (sourceQuestions.length + medicationQuestions.length)) * 100),
+      completedAt: entries.reduce((latest, entry) => entry.completedAt > latest ? entry.completedAt : latest, first.completedAt),
+      durationMs: totalTime || null,
+      attempts: totalAttempts,
+      rank: 0,
+    };
+  });
+}
+
+export default function Home() {
+  // React-Zustände speichern Eingaben, Fortschritt, Antworten und Darstellung.
+  const [name, setName] = useState("");
+  const [nameError, setNameError] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
+  const [usedNames, setUsedNames] = useState<string[]>(getStoredNames);
+  const [started, setStarted] = useState(false);
+  const [showQuizSelection, setShowQuizSelection] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [quizStartedAt, setQuizStartedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [current, setCurrent] = useState(0);
+  const [answersByQuestion, setAnswersByQuestion] = useState<Array<boolean | null>>(() => Array(sourceQuestions.length).fill(null));
+  const [responsesByQuestion, setResponsesByQuestion] = useState<Array<string | null>>(() => Array(sourceQuestions.length).fill(null));
+  const [questions, setQuestions] = useState<Question[]>(createQuiz);
+  const [quizMode, setQuizMode] = useState<"roche" | "medication">("roche");
+  const [darkMode, setDarkMode] = useState(false);
+  const [results, setResults] = useState<QuizResult[]>(() => rankResults(readResults()));
+  const [savedResult, setSavedResult] = useState<QuizResult | null>(null);
+  const [showRanking, setShowRanking] = useState(false);
+  const [rankingScope, setRankingScope] = useState<RankingScope>("overall");
+  const [showMistakes, setShowMistakes] = useState(false);
+  const [estimateProduction, setEstimateProduction] = useState("");
+  const [estimateRevenue, setEstimateRevenue] = useState("");
+
+  // Der Testname macht im Quiz die richtige Antwort fett sichtbar.
+  const isDevMode = name.trim() === "1234567899";
+  const question = questions[current];
+  const score = answersByQuestion.filter(Boolean).length;
+  const scorePercentage = Math.round((score / questions.length) * 100);
+  const showFoundingVideo = question.question === "Wann und wo wurde Roche gegründet?";
+  const progress = finished ? 100 : (current / questions.length) * 100;
+  const ranking = useMemo(() => rankingScope === "overall" ? rankResults(buildOverallResults(results)) : rankResults(results.filter((result) => result.quiz === rankingScope)), [results, rankingScope]);
+
+  useEffect(() => {
+    if (!finished || savedResult || !name.trim()) return;
+
+    const saveTimer = window.setTimeout(() => {
+      const previousResult = results.find((item) => item.quiz === quizMode && normalizeName(item.name) === normalizeName(name));
+      const currentDuration = quizStartedAt === null ? null : Date.now() - quizStartedAt;
+      const isBetterAttempt = !previousResult || score > previousResult.correct || (score === previousResult.correct && currentDuration !== null && (previousResult.durationMs === null || currentDuration < previousResult.durationMs));
+      const bestScore = isBetterAttempt ? score : previousResult?.correct ?? score;
+      const result: QuizResult = {
+        id: previousResult?.id ?? `${Date.now()}-${quizMode}-${name.trim()}`,
+        name: name.trim(),
+        quiz: quizMode,
+        correct: bestScore,
+        total: questions.length,
+        percentage: Math.round((bestScore / questions.length) * 100),
+        completedAt: new Date().toISOString(),
+        durationMs: isBetterAttempt ? currentDuration : previousResult?.durationMs ?? currentDuration,
+        attempts: (previousResult?.attempts ?? 0) + 1,
+        rank: 0,
+      };
+      const nextResults = rankResults([...results.filter((item) => item.quiz !== result.quiz || normalizeName(item.name) !== normalizeName(result.name)), result]);
+      const currentResult = nextResults.find((item) => item.id === result.id) ?? result;
+
+      try {
+        window.localStorage.setItem(RESULTS_KEY, JSON.stringify(nextResults));
+      } catch {
+        // Das Quiz funktioniert auch, wenn der Browser keinen Speicher erlaubt.
+      }
+      setResults(nextResults);
+      setSavedResult(currentResult);
+    }, 0);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [finished, name, questions.length, quizMode, quizStartedAt, results, savedResult, score]);
+
+  // Aktualisiert die sichtbare Quizzeit einmal pro Sekunde.
+  useEffect(() => {
+    if (quizStartedAt === null || finished || showQuizSelection) return;
+
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - quizStartedAt) / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [quizStartedAt, finished, showQuizSelection]);
+
+  // Löscht die lokal gespeicherten Namen und zeigt eine Erfolgsmeldung.
+  function resetStoredNames() {
+    window.localStorage.removeItem(USED_NAMES_KEY);
+    window.localStorage.removeItem(RESULTS_KEY);
+    setUsedNames([]);
+    setResults([]);
+    setSavedResult(null);
+    setShowRanking(false);
+    setNameError("");
+    setResetMessage("Die gespeicherten Daten wurden erfolgreich gelöscht.");
+  }
+
+  // Prüft den Namen, speichert ihn einmalig und startet einen neuen Quizdurchlauf.
+  function startQuiz(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cleanName = name.trim();
+    const normalizedName = cleanName.toLowerCase();
+
+    if (!cleanName) {
+      setNameError("Bitte gib deinen Namen ein.");
+      return;
+    }
+    if (cleanName.length > 25) {
+      setNameError("Der Name darf höchstens 25 Zeichen lang sein.");
+      return;
+    }
+    const updatedNames = usedNames.includes(normalizedName) ? usedNames : [...usedNames, normalizedName];
+    setUsedNames(updatedNames);
+    window.localStorage.setItem(USED_NAMES_KEY, JSON.stringify(updatedNames));
+    setNameError("");
+    setResetMessage("");
+    setQuestions(createQuiz());
+    setCurrent(0);
+    setAnswersByQuestion(Array(sourceQuestions.length).fill(null));
+    setResponsesByQuestion(Array(sourceQuestions.length).fill(null));
+    setShowMistakes(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setShowQuizSelection(true);
+    setStarted(true);
+  }
+
+  function selectRocheQuiz() {
+    setQuizMode("roche");
+    setQuestions(createQuiz());
+    setCurrent(0);
+    setAnswersByQuestion(Array(sourceQuestions.length).fill(null));
+    setResponsesByQuestion(Array(sourceQuestions.length).fill(null));
+    setShowMistakes(false);
+    setEstimateProduction("");
+    setEstimateRevenue("");
+    setQuizStartedAt(Date.now());
+    setElapsedSeconds(0);
+    setShowQuizSelection(false);
+  }
+
+  // Speichert die Lösung und springt sofort zur nächsten Frage.
+  function submitEstimate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const production = Number(estimateProduction);
+    const revenue = Number(estimateRevenue);
+    const isCorrect = production >= 100 && production <= 1000 && revenue >= 30 && revenue <= 80;
+
+    setAnswersByQuestion((previousAnswers) => {
+      const updatedAnswers = [...previousAnswers];
+      updatedAnswers[current] = isCorrect;
+      return updatedAnswers;
+    });
+    setResponsesByQuestion((previousResponses) => {
+      const updatedResponses = [...previousResponses];
+      updatedResponses[current] = `${production} Millionen Packungen, ${revenue} Milliarden CHF`;
+      return updatedResponses;
+    });
+
+    if (current === questions.length - 1) {
+      setFinished(true);
+      return;
+    }
+
+    setCurrent((value) => value + 1);
+  }
+
+  function chooseAnswer(answerIndex: number) {
+    setAnswersByQuestion((previousAnswers) => {
+      const updatedAnswers = [...previousAnswers];
+      updatedAnswers[current] = question.answers[answerIndex].correct;
+      return updatedAnswers;
+    });
+    setResponsesByQuestion((previousResponses) => {
+      const updatedResponses = [...previousResponses];
+      updatedResponses[current] = question.answers[answerIndex].text;
+      return updatedResponses;
+    });
+
+    if (current === questions.length - 1) {
+      setFinished(true);
+      return;
+    }
+
+    setCurrent((value) => value + 1);
+  }
+
+  // Setzt das Quiz für einen neuen Durchlauf zurück.
+  function selectMedicationQuiz() {
+    setQuizMode("medication");
+    setQuestions(createQuiz(medicationQuestions, false));
+    setCurrent(0);
+    setAnswersByQuestion(Array(medicationQuestions.length).fill(null));
+    setResponsesByQuestion(Array(medicationQuestions.length).fill(null));
+    setShowMistakes(false);
+    setEstimateProduction("");
+    setEstimateRevenue("");
+    setQuizStartedAt(Date.now());
+    setElapsedSeconds(0);
+    setShowQuizSelection(false);
+  }
+
+  function restart() {
+    setStarted(false);
+    setShowQuizSelection(false);
+    setFinished(false);
+    setQuizStartedAt(null);
+    setElapsedSeconds(0);
+    setName("");
+    setNameError("");
+    setCurrent(0);
+    setAnswersByQuestion(Array(sourceQuestions.length).fill(null));
+    setResponsesByQuestion(Array(sourceQuestions.length).fill(null));
+    setShowMistakes(false);
+    setEstimateProduction("");
+    setEstimateRevenue("");
+    setQuestions(createQuiz());
+    setSavedResult(null);
+    setShowRanking(false);
+  }
+
+  // Gemeinsame Tailwind-Klassen für Hellmodus, Night Mode und Antwortfarben.
+  const pageBackground = darkMode ? "bg-[#000000] text-[#FFFFFF]" : "bg-[#FFFFFF] text-[#000000]";
+  const cardBackground = darkMode ? "border-[#4C5456] bg-[#000000]/90" : "border-white bg-white/90";
+  const mutedText = darkMode ? "text-[#BABABA]" : "text-[#4C5456]";
+  // Antwortmöglichkeiten bleiben bewusst farbig, damit sie schnell unterscheidbar sind.
+  const answerColors = darkMode
+    ? ["border-blue-500/60 bg-blue-500/10 hover:border-blue-400 hover:bg-blue-500/20", "border-red-500/60 bg-red-500/10 hover:border-red-400 hover:bg-red-500/20", "border-yellow-500/60 bg-yellow-500/10 hover:border-yellow-400 hover:bg-yellow-500/20", "border-emerald-500/60 bg-emerald-500/10 hover:border-emerald-400 hover:bg-emerald-500/20"]
+    : ["border-blue-200 bg-blue-50 hover:border-blue-400 hover:bg-blue-100", "border-red-200 bg-red-50 hover:border-red-400 hover:bg-red-100", "border-yellow-200 bg-yellow-50 hover:border-yellow-400 hover:bg-yellow-100", "border-emerald-200 bg-emerald-50 hover:border-emerald-400 hover:bg-emerald-100"];
+  const answerLetters = ["A", "B", "C", "D"];
+
+  // Die Oberfläche wechselt je nach Zustand zwischen Start, Quiz und Ergebnis.
+  return (
+    <main className={`relative min-h-screen overflow-hidden transition-colors duration-300 ${pageBackground}`}>
+      {/* Dekorative Formen liegen hinter dem Inhalt und blockieren keine Klicks. */}
+      <div className="absolute inset-0 pointer-events-none opacity-70" aria-hidden="true">
+        <div className="absolute -left-24 top-36 h-64 w-64 rounded-full border-[42px] border-[#0B41CD]/70 [clip-path:inset(0_0_50%_0)] -rotate-12" />
+        <div className="absolute -right-20 bottom-24 h-72 w-72 rounded-full border-[46px] border-[#BABABA]/70 [clip-path:inset(50%_0_0_0)] rotate-12" />
+        <div className="absolute right-[12%] top-24 h-28 w-28 rotate-12 rounded-[42%_58%_65%_35%] border-[20px] border-[#0B41CD]/30" />
+        <div className="absolute bottom-24 left-[14%] h-20 w-20 -rotate-12 rounded-[65%_35%_45%_55%] bg-[#4C5456]/25" />
+      </div>
+
+      {/* Kopfzeile mit Logo, Bereichsbezeichnung und Quizstatus. */}
+      <header className={`relative z-10 flex w-full items-center justify-between px-5 py-3 shadow-sm transition-colors lg:px-10 ${darkMode ? "bg-[#000000]" : "bg-white"}`}>
+        <div className="flex items-center gap-4">
+          <Image src="/roche-logo.png" alt="Roche" width={150} height={60} priority unoptimized className={`h-9 w-28 object-contain transition duration-300 ${darkMode ? "brightness-75 contrast-125" : ""}`} />
+          <span className={`hidden border-l pl-3 text-[10px] font-semibold tracking-[0.16em] sm:block ${mutedText}`}>DIAGNOSTICS &amp; PHARMA</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => { setRankingScope("overall"); setShowRanking((value) => !value); }} aria-pressed={showRanking} className={`rounded-lg border px-3 py-2 text-xs font-semibold transition hover:border-[#0B41CD] hover:text-[#0B41CD] ${darkMode ? "border-[#4C5456] text-[#FFFFFF]" : "border-[#BABABA] text-[#4C5456]"}`}>Rangliste</button>
+          <div className={`hidden text-xs font-semibold uppercase tracking-[0.18em] sm:block ${mutedText}`}>Wissenstest <span className="ml-2 inline-block h-2 w-2 rounded-full bg-[#0B41CD]" /></div>
+        </div>
+      </header>
+
+      {/* Hauptbereich: zeigt Startformular, Fragen oder Ergebnis. */}
+      <section className="relative z-10 mx-auto flex min-h-[calc(100vh-104px)] w-full max-w-6xl items-center justify-center px-6 pb-12 lg:px-10">
+        {/* Noch nicht gestartet: Name eingeben und Quiz beginnen. */}
+        {showRanking ? (
+          <section className={`w-full max-w-3xl rounded-[2rem] border border-t-4 border-t-blue-700 p-8 shadow-2xl backdrop-blur-xl md:p-12 ${cardBackground}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#0B41CD]">Roche Wissenstest</p>
+                <h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl">Rangliste</h1>
+              </div>
+              <span className={`rounded-full px-3 py-2 text-xs font-semibold ${darkMode ? "bg-[#4C5456] text-[#BABABA]" : "bg-[#BABABA] text-[#4C5456]"}`}>Lokal gespeichert</span>
+            </div>
+            <div className="mt-8 flex flex-wrap gap-2" role="tablist" aria-label="Ranglisten auswählen">
+              {([['overall', 'Gesamt · 14 Fragen'], ['roche', 'Roche Quiz'], ['medication', 'Medikamente Quiz']] as const).map(([scope, label]) => <button key={scope} type="button" onClick={() => setRankingScope(scope)} className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${rankingScope === scope ? "border-[#0B41CD] bg-[#0B41CD] text-white" : darkMode ? "border-[#4C5456] text-[#BABABA]" : "border-[#BABABA] text-[#4C5456]"}`}>{label}</button>)}
+            </div>
+            {ranking.length === 0 ? (
+              <p className={`mt-10 rounded-xl border border-dashed p-8 text-center ${mutedText}`}>Noch keine Ergebnisse vorhanden. Starte den Wissenstest und sichere dir den ersten Platz.</p>
+            ) : (
+              <ol className="mt-8 space-y-3" aria-label="Rangliste">
+                {ranking.map((result) => (
+                  <li key={result.id} className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${savedResult?.id === result.id ? "border-blue-600 ring-2 ring-[#BABABA]" : darkMode ? "border-[#4C5456] bg-[#4C5456]/70" : "border-[#BABABA] bg-slate-50"}`}>
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-bold ${result.rank === 1 ? "bg-[#BABABA] text-[#000000]" : result.rank === 2 ? "bg-[#BABABA] text-[#000000]" : result.rank === 3 ? "bg-[#4C5456] text-[#FFFFFF]" : darkMode ? "bg-[#4C5456] text-[#FFFFFF]" : "bg-white text-[#4C5456]"}`}>{result.rank}</span>
+                    <span className="min-w-0 flex-1 truncate font-semibold">{result.name}{savedResult?.id === result.id && <span className="ml-2 text-xs font-normal text-[#0B41CD]">(dein Ergebnis)</span>}</span>
+                    <span className="text-right text-sm font-semibold"><strong>{result.correct}/{result.total}</strong><span className={`ml-2 hidden text-xs font-normal sm:inline ${mutedText}`}>{result.percentage}% · {formatDuration(result.durationMs)} · {result.attempts} {result.attempts === 1 ? "Versuch" : "Versuche"}</span></span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <button type="button" onClick={() => setShowRanking(false)} className="mt-8 rounded-xl bg-[#0B41CD] px-5 py-3 font-semibold text-white transition hover:bg-[#0B41CD]">Zurück zum Wissenstest <span aria-hidden="true">→</span></button>
+          </section>
+        ) : !started ? (
+          <div className={`grid w-full max-w-5xl gap-10 rounded-[2rem] border border-t-4 border-t-blue-700 p-8 shadow-2xl backdrop-blur-xl md:grid-cols-[1.15fr_0.85fr] md:p-14 ${cardBackground}`}>
+            <div className="flex flex-col justify-center">
+              <p className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-[#0B41CD]">Roche Wissenstest</p>
+              <h1 className="max-w-xl text-4xl font-bold leading-tight tracking-tight md:text-6xl">Doing now what patients <span className="font-[Georgia] text-[#0B41CD] italic tracking-wide">need next.</span></h1>
+              <p className={`mt-6 max-w-lg text-lg leading-8 ${mutedText}`}>Wie gut kennst du Roche? Entdecke die Geschichte, Forschung und Ideen hinter einem weltweit tätigen Gesundheitsunternehmen.</p>
+              <div className={`mt-8 flex gap-3 text-sm font-semibold ${mutedText}`}><span>07 Fragen</span><span>·</span><span>ca. 1 Minute</span></div>
+            </div>
+            <form className={`flex flex-col justify-center rounded-3xl border p-6 shadow-inner ${darkMode ? "border-[#4C5456] bg-[#4C5456]/35" : "border-[#BABABA] bg-[#BABABA]/20"}`} onSubmit={startQuiz}>
+              <label htmlFor="name" className="font-semibold">Wie heißt du?</label>
+              <input id="name" type="text" value={name} onChange={(event) => { setName(event.target.value); setNameError(""); setResetMessage(""); }} placeholder="Dein Vorname" maxLength={25} autoComplete="given-name" required className={`mt-3 rounded-xl border px-4 py-3 outline-none ring-[#0B41CD]/30 transition focus:ring-4 ${darkMode ? "border-[#4C5456] bg-[#4C5456] text-white placeholder:text-slate-400" : "border-[#BABABA] bg-white text-slate-900"}`} />
+              {nameError && <p className="mt-2 text-sm font-medium text-[#000000]">{nameError}</p>}
+              {resetMessage && <p className="mt-2 text-sm font-medium text-[#0B41CD]">{resetMessage}</p>}
+              <button className="mt-5 rounded-xl bg-[#0B41CD] px-5 py-3 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[#0B41CD]" type="submit">Test starten <span aria-hidden="true">→</span></button>
+              <small className={`mt-3 text-center ${mutedText}`}>Keine Anmeldung nötig.</small>
+              <button type="button" onClick={resetStoredNames} className={`mt-2 text-xs underline transition hover:text-[#0B41CD] ${mutedText}`}>Gespeicherte Daten zurücksetzen</button>
+            </form>
+          </div>
+        ) : showQuizSelection ? (
+          <div className={`w-full max-w-3xl rounded-[2rem] border border-t-4 border-t-blue-700 p-8 text-center shadow-2xl backdrop-blur-xl md:p-12 ${cardBackground}`}>
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#0B41CD]">Quiz auswählen</p>
+            <h1 className="mt-3 text-4xl font-bold tracking-tight">Welches Quiz möchtest du spielen?</h1>
+            <p className={`mx-auto mt-4 max-w-xl ${mutedText}`}>Wähle ein Quiz aus. Weitere Quizze sind als Platzhalter vorbereitet.</p>
+            <div className="mt-8 grid gap-4 sm:grid-cols-2">
+              <button type="button" onClick={selectRocheQuiz} className="rounded-2xl bg-[#0B41CD] px-5 py-6 text-lg font-bold text-white shadow-lg transition hover:-translate-y-1 hover:bg-[#0B41CD]">Roche Quiz</button>
+              <button type="button" onClick={selectMedicationQuiz} className="rounded-2xl bg-[#0B41CD] px-5 py-6 text-lg font-bold text-white shadow-lg transition hover:-translate-y-1 hover:bg-[#0B41CD]">Roche Medikamente Quiz</button>
+              <button type="button" disabled className="cursor-not-allowed rounded-2xl bg-blue-300 px-5 py-6 text-lg font-bold text-white opacity-70">Quiz Platzhalter 3</button>
+              <button type="button" disabled className="cursor-not-allowed rounded-2xl bg-blue-300 px-5 py-6 text-lg font-bold text-white opacity-70">Quiz Platzhalter 4</button>
+            </div>
+          </div>
+        ) : finished ? (
+          <div className={`w-full max-w-2xl rounded-[2rem] border border-t-4 border-t-blue-700 p-8 text-center shadow-2xl backdrop-blur-xl md:p-14 ${cardBackground}`}>
+            {/* Zeigt das Ergebnis und bietet einen Neustart an. */}
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-[#0B41CD]">Wissenstest abgeschlossen</p>
+            <div className="my-8"><strong className="text-7xl font-bold text-[#0B41CD]">{score}<small className={`text-3xl ${mutedText}`}> / {questions.length}</small></strong><span className={`mt-2 block ${mutedText}`}>richtige Antworten</span></div>
+            <h1 className="text-3xl font-bold">Danke, {name.trim()}!</h1>
+            <p className={`mt-3 ${mutedText}`}>Du hast {score} von {questions.length} Roche-Fragen richtig beantwortet.</p>
+            {savedResult && <p className="mt-4 text-lg font-semibold text-[#0B41CD]">Dein Rang: {savedResult.rank}. Platz · Zeit: {formatDuration(savedResult.durationMs)}</p>}
+            <div className="my-8 text-left" aria-label={`Ergebnis: ${scorePercentage} Prozent`}>
+              <div className={`mb-2 flex justify-between text-sm font-semibold ${mutedText}`}><span>Dein Ergebnis</span><span>{scorePercentage}%</span></div>
+              <div className={`result-progress h-5 overflow-hidden rounded-full ${darkMode ? "bg-[#4C5456]" : "bg-[#BABABA]"}`}>
+                <span className="result-progress-fill block h-full rounded-full bg-gradient-to-r from-[#0B41CD] via-[#0B41CD] to-[#0B41CD]/40" style={{ width: `${scorePercentage}%` }} />
+              </div>
+            </div>
+            <button type="button" onClick={() => setShowMistakes((value) => !value)} className={`mb-6 rounded-xl border px-5 py-3 font-semibold transition hover:border-[#0B41CD] hover:text-[#0B41CD] hover:shadow-[0_0_18px_rgba(11,65,205,0.5)] ${darkMode ? "border-[#4C5456]" : "border-[#BABABA]"}`}>{showMistakes ? "Fehler ausblenden" : "Fehler anzeigen"}</button>
+            {showMistakes && (
+              <div className={`mb-8 space-y-4 rounded-2xl border p-5 text-left ${darkMode ? "border-[#4C5456] bg-[#4C5456]/35" : "border-[#BABABA] bg-[#BABABA]/20"}`}>
+                <h2 className="font-bold text-[#0B41CD]">Deine Fehler</h2>
+                {questions.map((item, index) => answersByQuestion[index] === false && <div key={item.question} className={`rounded-xl border p-4 text-sm ${darkMode ? "border-[#4C5456]" : "border-[#BABABA]"}`}><p className="font-semibold">{item.question}</p><p className={`mt-2 ${mutedText}`}>Deine Antwort: {responsesByQuestion[index] ?? "Keine Antwort"}</p><p className="mt-1 text-[#0B41CD]">Richtige Lösung: {item.inputType === "estimate" ? "ca. 100–1.000 Millionen Packungen und 30–80 Milliarden CHF Umsatz" : item.answers.find((answer) => answer.correct)?.text}</p></div>)}
+                {score === questions.length && <p className="text-sm text-[#0B41CD]">Alle Antworten waren richtig.</p>}
+              </div>
+            )}
+            <div className="flex flex-wrap justify-center gap-3">
+              <button className="primary-action rounded-xl bg-[#0B41CD] px-6 py-3 font-semibold text-white transition" onClick={restart}>Nochmal starten <span>↻</span></button>
+              <button type="button" onClick={() => setShowRanking(true)} className={`rounded-xl border px-6 py-3 font-semibold transition hover:border-[#0B41CD] hover:text-[#0B41CD] hover:shadow-[0_0_18px_rgba(11,65,205,0.5)] ${darkMode ? "border-[#4C5456]" : "border-[#BABABA]"}`}>Rangliste ansehen</button>
+            </div>
+          </div>
+        ) : (
+          <div className={`w-full max-w-4xl rounded-[2rem] border border-t-4 border-t-blue-700 p-8 shadow-2xl backdrop-blur-xl md:p-14 ${cardBackground}`}>
+            {/* Während des Quiz: Fortschritt, Video, Frage und Antworten anzeigen. */}
+            <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-[#0B41CD]">Roche Wissenstest · {name.trim()}</p><h1 className="mt-3 text-3xl font-bold md:text-5xl">Deine nächste Frage</h1></div><div className="text-right"><strong className="text-4xl text-[#0B41CD]">{String(current + 1).padStart(2, "0")}</strong><span className={`block text-sm ${mutedText}`}>/ {String(questions.length).padStart(2, "0")}</span><span className={`mt-2 block text-xs font-semibold ${mutedText}`}>Zeit {formatDuration(elapsedSeconds * 1000)}</span></div></div>
+            <div className={`mt-8 h-2 overflow-hidden rounded-full ${darkMode ? "bg-[#4C5456]" : "bg-[#BABABA]"}`}><span className="block h-full rounded-full bg-[#0B41CD] transition-all duration-300" style={{ width: `${progress}%` }} /></div>
+            <p className="mt-10 text-2xl font-semibold leading-relaxed md:text-3xl">{question.question}</p>
+            {showFoundingVideo && (
+              <div className="mt-6 overflow-hidden rounded-2xl border border-[#BABABA] bg-black shadow-lg">
+                <video className="aspect-video w-full" controls preload="metadata" title="Screenrecording zur Gründung von Roche">
+                  <source src="/roche-gruendung.mp4" type="video/mp4" />
+                  Dein Browser unterstützt dieses Videoformat nicht.
+                </video>
+              </div>
+            )}
+            {question.inputType === "estimate" ? (
+              <form className={`mt-8 grid gap-5 rounded-2xl border p-6 ${darkMode ? "border-[#4C5456] bg-[#4C5456]/35" : "border-[#BABABA] bg-[#BABABA]/20"}`} onSubmit={submitEstimate}>
+                <p className={`text-sm ${mutedText}`}>Gib deine Schätzung in Millionen Packungen und Milliarden CHF ein. Eine Antwort gilt als richtig, wenn beide Werte ungefähr in der plausiblen Größenordnung liegen.</p>
+                <label className="grid gap-2 font-semibold">Packungen pro Jahr (in Millionen)<input type="number" min="0" value={estimateProduction} onChange={(event) => setEstimateProduction(event.target.value)} className={`rounded-xl border px-4 py-3 outline-none ring-[#0B41CD]/30 focus:ring-4 ${darkMode ? "border-[#4C5456] bg-[#4C5456] text-white" : "border-[#BABABA] bg-white text-black"}`} required /></label>
+                <label className="grid gap-2 font-semibold">Umsatz durch Verkäufe (in Milliarden CHF)<input type="number" min="0" value={estimateRevenue} onChange={(event) => setEstimateRevenue(event.target.value)} className={`rounded-xl border px-4 py-3 outline-none ring-[#0B41CD]/30 focus:ring-4 ${darkMode ? "border-[#4C5456] bg-[#4C5456] text-white" : "border-[#BABABA] bg-white text-black"}`} required /></label>
+                <button type="submit" className="rounded-xl bg-[#0B41CD] px-5 py-3 font-semibold text-white transition hover:bg-[#0B41CD]">Schätzung abgeben <span aria-hidden="true">→</span></button>
+              </form>
+            ) : (
+              <div className="mt-8 grid gap-4 md:grid-cols-2" role="group" aria-label="Antwortmöglichkeiten">{question.answers.map((answer, index) => <button key={answer.text} className={`flex min-h-20 items-center gap-4 rounded-2xl border-2 px-5 py-4 text-left font-medium transition hover:-translate-y-0.5 ${answerColors[index]} ${isDevMode && answer.correct ? "font-extrabold" : ""}`} onClick={() => chooseAnswer(index)}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/80 text-sm font-bold text-[#4C5456]">{answerLetters[index]}</span><span>{answer.text}</span></button>)}</div>
+            )}
+            <div className={`mt-8 flex flex-col gap-4 border-t pt-6 text-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? "border-[#4C5456] text-[#BABABA]" : "border-[#BABABA] text-[#4C5456]"}`}>
+              <span>Wähle eine Antwort aus, um automatisch weiterzugehen.</span>
+              {current > 0 && <button type="button" onClick={() => setCurrent((value) => value - 1)} className="font-semibold text-[#0B41CD] transition hover:text-blue-900">← Zurück</button>}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Fußzeile mit Projektname, Slogan und Night-Mode-Umschalter. */}
+      <footer className={`relative z-10 mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-6 pb-6 text-xs ${mutedText} lg:px-10`}><span>Roche Wissenstest</span><span>Doing now what patients need next.</span><div className="flex items-center gap-4"><button type="button" onClick={() => setShowRanking((value) => !value)} className="font-semibold transition hover:text-[#0B41CD]">Rangliste</button><button type="button" onClick={() => setDarkMode((value) => !value)} className="font-semibold transition hover:text-[#0B41CD]" aria-label={darkMode ? "Light mode aktivieren" : "Dark mode aktivieren"}>{darkMode ? "☀ Light mode" : "☾ Night mode"}</button></div></footer>
+    </main>
+  );
+}
