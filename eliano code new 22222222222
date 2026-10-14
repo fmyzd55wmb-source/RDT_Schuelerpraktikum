@@ -1,0 +1,1168 @@
+"use client";
+
+import Image from "next/image";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+
+type QuizId = string;
+type QuestionKind = "multiple-choice" | "text" | "number" | "true-false";
+type Answer = { text: string; correct: boolean };
+type MultipleChoiceQuestion = { id: string; kind: Extract<QuestionKind, "multiple-choice">; question: string; answers: Answer[] };
+type TextQuestion = { id: string; kind: Extract<QuestionKind, "text">; question: string; placeholder: string; expectedAnswers: string[]; feedbackAnswer: string };
+type NumberQuestion = { id: string; kind: Extract<QuestionKind, "number">; question: string; placeholder: string; expectedNumber: number; unit: string; feedbackAnswer: string };
+type TrueFalseQuestion = { id: string; kind: Extract<QuestionKind, "true-false">; question: string; expectedBoolean: boolean };
+type Question = MultipleChoiceQuestion | TextQuestion | NumberQuestion | TrueFalseQuestion;
+type QuizDefinition = { id: QuizId; title: string; description: string; questions: Question[]; isSystem?: boolean; questionCount?: number };
+type User = { id: number; username: string; role: "user" | "admin" };
+type AdminUser = { id: number; username: string; role: "user" | "admin"; bestCorrect: number | null; bestTotal: number | null; bestElapsedMs: number | null; bestCompletedAt: string | null; attempts: number };
+type QuizResult = { id: number; username: string; quizId: QuizId; correct: number; total: number; elapsedMs: number; percentage: number; completedAt: string; attempts?: number; attemptNumber?: number; rank?: number | null };
+type DraftQuestion = { kind: QuestionKind; question: string; answers: string[]; correctIndex: number; expectedAnswer: string; expectedNumber: string; unit: string; expectedBoolean: boolean };
+type Feedback = { correct: boolean; expected: string };
+type Language = "en" | "de" | "es" | "fr";
+
+const germanToEnglish: Record<string, string> = {
+  "Wann und wo wurde Roche gegründet?": "When and where was Roche founded?",
+  "Welche beiden Bereiche bilden das Roche-Geschäft?": "Which two areas make up Roche's business?",
+  "Was möchte Roche für Patientinnen und Patienten erreichen?": "What does Roche aim to achieve for patients?",
+  "In welchen Bereichen forscht Roche unter anderem?": "What areas does Roche research, among others?",
+  "Warum sind Diagnostik und Früherkennung wichtig?": "Why are diagnostics and early detection important?",
+  "Was bedeutet der kombinierte Ansatz von Roche?": "What does Roche's combined approach mean?",
+  "Was unterstützt laut Roche den langfristigen Erfolg?": "According to Roche, what supports long-term success?",
+  "Was ist bei einem möglichen Compliance-Verstoß ein verantwortungsvoller erster Schritt?": "What is a responsible first step when you suspect a compliance violation?",
+  "Ergänze den Satz: Compliance bedeutet, Regeln einzuhalten und ___ zu handeln.": "Complete the sentence: Compliance means following rules and acting ___.",
+  "Übungsregel: Einen möglichen Compliance-Hinweis meldest du innerhalb von 2 Tagen. Wie viele Tage nennt diese Regel?": "Practice rule: You report a possible compliance concern within 2 days. How many days does this rule specify?",
+  "Welches Verhalten passt zu einem sorgfältigen Umgang mit personenbezogenen Daten?": "Which behavior reflects careful handling of personal data?",
+  "1896 in der Schweiz": "1896 in Switzerland",
+  "1925 in Deutschland": "1925 in Germany",
+  "2001 in den USA": "2001 in the USA",
+  "1880 in Frankreich": "1880 in France",
+  "Diagnostik und Pharma": "Diagnostics and Pharma",
+  "Tourismus und Logistik": "Tourism and logistics",
+  "Software und Bauwesen": "Software and construction",
+  "Ernährung und Sport": "Nutrition and sports",
+  "Krankheiten verhindern, stoppen und heilen": "Prevent, stop and cure diseases",
+  "Nur bestehende Produkte verkaufen": "Only sell existing products",
+  "Gesundheitsdaten sammeln, ohne sie auszuwerten": "Collect health data without analyzing it",
+  "Ausschließlich Krankenhäuser bauen": "Build hospitals exclusively",
+  "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen": "Oncology, neuroscience, cardiovascular and metabolic diseases",
+  "Nur in der Raumfahrt": "Only in space travel",
+  "Ausschließlich in der Landwirtschaft": "Exclusively in agriculture",
+  "Nur in der Unterhaltungselektronik": "Only in consumer electronics",
+  "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden": "Diseases can be understood earlier and suitable treatments can be found faster",
+  "Damit Medikamente nicht geprüft werden müssen": "So medicines do not need to be tested",
+  "Damit Forschung überflüssig wird": "To make research unnecessary",
+  "Nur um Papier zu sparen": "Just to save paper",
+  "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patientinnen und Patienten auszurichten": "Align diagnostics, digital solutions and medicines with patients' needs",
+  "Nur Medikamente ohne Tests zu entwickeln": "Develop medicines without tests",
+  "Alle Produkte identisch zu machen": "Make all products identical",
+  "Forschung durch Werbung zu ersetzen": "Replace research with advertising",
+  "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit": "Innovation, effective processes, committed employees and sustainability",
+  "Stillstand und möglichst wenige Ideen": "Stagnation and as few ideas as possible",
+  "Arbeiten ohne Qualitätsstandards": "Working without quality standards",
+  "Nur schnelle Entscheidungen ohne Prüfung": "Only fast decisions without review",
+  "Die Beobachtung sachlich ansprechen und den vorgesehenen Speak-up-Weg nutzen": "Address the observation objectively and use the designated speak-up channel",
+  "Das Thema absichtlich verschweigen": "Deliberately conceal the issue",
+  "Ungeprüfte Gerüchte weiterleiten": "Forward unverified rumors",
+  "Passwörter anderer Personen verwenden": "Use other people's passwords",
+  "verantwortungsvoll": "responsibly",
+  "verantwortungsbewusst": "with a sense of responsibility",
+  "verantwortungsvoll oder verantwortungsbewusst": "responsibly or with a sense of responsibility",
+  "Nur notwendige Daten verwenden, schützen und nicht ohne Grund weitergeben": "Use only necessary data, protect it and do not share it without a reason",
+  "Daten grundsätzlich öffentlich teilen": "Share data publicly by default",
+  "Zugangsdaten an Kolleginnen und Kollegen weitergeben": "Share login credentials with colleagues",
+  "Datenschutzfragen ignorieren": "Ignore data privacy concerns",
+  "Roche Wissenstest": "Roche Knowledge Quiz",
+  "Roche entdecken": "Discover Roche",
+  "Geschichte, Forschung und das Roche-Geschäft": "History, research and Roche's business",
+  "Compliance bei Roche": "Compliance at Roche",
+  "Integrität, Datenschutz und Speak-up im Arbeitsalltag": "Integrity, data privacy and speak-up in everyday work",
+  "Deine Antwort": "Your answer",
+  "Zahl eingeben": "Enter a number",
+  "Tage": "days",
+  "Rangliste": "Leaderboard",
+  "Wissenstest": "Knowledge quiz",
+  "Serverseitig gespeichert": "Saved on server",
+  "Meine Ergebnisse": "My results",
+  "Noch keine Ergebnisse für dieses Quiz vorhanden.": "No results are available for this quiz yet.",
+  "Versuch": "Attempt",
+  "Versuche": "Attempts",
+  "Zurück zum Dashboard": "Back to dashboard",
+  "Quizze": "Quizzes",
+  "Anmelden": "Log in",
+  "Registrieren": "Register",
+  "Benutzername": "Username",
+  "Maximal 25 Zeichen": "Maximum 25 characters",
+  "Passwort": "Password",
+  "Dein Passwort": "Your password",
+  "Passwort verbergen": "Hide password",
+  "Passwort anzeigen": "Show password",
+  "Verbergen": "Hide",
+  "Anzeigen": "Show",
+  "Bitte warten …": "Please wait …",
+  "Dein Roche-Dashboard": "Your Roche dashboard",
+  "Rangliste öffnen": "Open leaderboard",
+  "Adminbereich öffnen": "Open admin area",
+  "Account löschen": "Delete account",
+  "Adminbereich": "Admin area",
+  "Neues Quiz erstellen": "Create new quiz",
+  "Quizverwaltung": "Quiz management",
+  "System": "System",
+  "Fragen": "Questions",
+  "Bearbeiten": "Edit",
+  "Löschen": "Delete",
+  "Benutzer": "Users",
+  "Quiz bearbeiten": "Edit quiz",
+  "Titel": "Title",
+  "Beschreibung": "Description",
+  "Frage": "Question",
+  "Fragetext": "Question text",
+  "Lückentext": "Fill-in-the-blank",
+  "Zahleneingabe": "Number input",
+  "Wahr/Falsch": "True/False",
+  "Antwort": "Answer",
+  "Erwartete Antwort": "Expected answer",
+  "Richtig: Wahr": "Correct: True",
+  "Richtig: Falsch": "Correct: False",
+  "Erwartete Zahl": "Expected number",
+  "Einheit, z. B. Tage": "Unit, e.g. days",
+  "Frage entfernen": "Remove question",
+  "Frage hinzufügen": "Add question",
+  "Speichert …": "Saving …",
+  "Quiz speichern": "Save quiz",
+  "Abbrechen": "Cancel",
+  "abgeschlossen": "completed",
+  "richtige Antworten": "correct answers",
+  "Danke, ": "Thanks, ",
+  "Zeit:": "Time:",
+  "Dein Rang:": "Your rank:",
+  "Platz": "place",
+  "Deine nächste Frage": "Your next question",
+  "Vergangene Zeit": "Elapsed time",
+  "Screenrecording zur Gründung von Roche": "Screen recording about Roche's founding",
+  "Dein Browser unterstützt dieses Videoformat nicht.": "Your browser does not support this video format.",
+  "Antwortmöglichkeiten": "Answer options",
+  "Antwort eingeben": "Enter answer",
+  "Prüfen": "Check",
+  "Wahr": "True",
+  "Falsch": "False",
+  "Richtig!": "Correct!",
+  "Noch nicht richtig.": "Not quite right.",
+  "Richtige Antwort:": "Correct answer:",
+  "Ergebnis anzeigen": "Show result",
+  "Weiter": "Next",
+  "Prüfe dein Feedback und fahre dann fort.": "Review your feedback, then continue.",
+  "Wähle eine Antwort aus.": "Choose an answer.",
+  "Wähle Wahr oder Falsch aus.": "Choose true or false.",
+  "Gib deine Antwort ein und prüfe sie.": "Enter your answer and check it.",
+  "Light mode aktivieren": "Enable light mode",
+  "Dark mode aktivieren": "Enable dark mode",
+  "Entdecke Roche und lerne die Organisation, ihre Forschung und ihre Arbeitsweise kennen.": "Discover Roche and learn about the organization, its research and the way it works.",
+  "Wähle ein Quiz aus und entdecke Roche in deinem eigenen Tempo.": "Choose a quiz and discover Roche at your own pace.",
+  "Abmelden": "Log out",
+  "Mindestens 12 Zeichen, Zahl, Groß-/Kleinbuchstabe und Sonderzeichen.": "At least 12 characters, a number, uppercase/lowercase letter, and special character.",
+  "Bestehendes Quiz": "Built-in quiz",
+  "Eigenes Quiz": "Custom quiz",
+  "Dein bester Stand:": "Your best result:",
+  "Noch kein Ergebnis": "No result yet",
+  "Abgeschlossen:": "Completed:",
+  "Durchläufe": "Attempts",
+  "Nochmal spielen": "Play again",
+  "Quiz starten": "Start quiz",
+  "Admin löschen": "Delete admin",
+  "Dashboard": "Dashboard",
+  "Antwortmöglichkeiten": "Answer options",
+  "Prüfe dein Feedback und fahre dann fort.": "Review your feedback, then continue.",
+  "Wähle eine Antwort aus.": "Choose an answer.",
+  "Wähle Wahr oder Falsch aus.": "Choose true or false.",
+  "Gib deine Antwort ein und prüfe sie.": "Enter your answer and check it.",
+  "Nochmal starten": "Start again",
+  "Zum Dashboard": "Back to dashboard",
+  "Bitte gib eine Antwort ein.": "Please enter an answer.",
+  "Möchtest du deinen Account wirklich löschen? Deine Highscore-Daten werden ebenfalls entfernt.": "Do you really want to delete your account? Your high-score data will also be removed.",
+  "Diesen Benutzer wirklich löschen?": "Really delete this user?",
+  "Die Rangliste konnte nicht geladen werden.": "The leaderboard could not be loaded.",
+  "Das Quiz konnte nicht gelöscht werden.": "The quiz could not be deleted.",
+  "Der Server ist momentan nicht erreichbar.": "The server is currently unavailable.",
+  "Bitte gib Titel, Beschreibung und mindestens eine Frage ein.": "Please enter a title, description, and at least one question.",
+  "Das Quiz konnte nicht gespeichert werden.": "The quiz could not be saved.",
+  "Der Benutzername muss 1 bis 25 Zeichen lang sein.": "The username must be 1 to 25 characters long.",
+  "Bitte gib dein Passwort ein.": "Please enter your password.",
+  "Die Anmeldung ist fehlgeschlagen.": "Log in failed.",
+  "Der Account konnte nicht gelöscht werden.": "The account could not be deleted.",
+  "Die Admin-Daten konnten nicht geladen werden.": "The admin data could not be loaded.",
+  "Der Benutzer konnte nicht gelöscht werden.": "The user could not be deleted.",
+  "Das Ergebnis konnte nicht gespeichert werden.": "The result could not be saved.",
+  "Adminrechte erforderlich.": "Administrator privileges required.",
+  "Ungültige Benutzer-ID.": "Invalid user ID.",
+  "Benutzername oder Passwort ist nicht korrekt.": "Username or password is incorrect.",
+  "Das Passwort braucht mindestens 12 Zeichen, eine Zahl, einen Groß- und Kleinbuchstaben sowie ein Sonderzeichen.": "The password must contain at least 12 characters, a number, uppercase and lowercase letters, and a special character.",
+  "Dieser Benutzername ist bereits vergeben.": "This username is already taken.",
+  "Die Registrierung konnte nicht abgeschlossen werden.": "Registration could not be completed.",
+  "Quiz nicht gefunden.": "Quiz not found.",
+  "Bitte melde dich für deine Ergebnisse an.": "Please log in to view your results.",
+  "Bitte melde dich zuerst an.": "Please log in first.",
+  "Ungültiges Ergebnis.": "Invalid result.",
+  "Ein Quiz braucht 1 bis 50 Fragen.": "A quiz needs 1 to 50 questions.",
+  "Jede Frage braucht gültige Angaben.": "Each question needs valid details.",
+  "Jede Frage braucht Text und einen gültigen Fragetyp.": "Each question needs text and a valid question type.",
+  "Multiple-Choice-Fragen brauchen genau vier Antworten und eine richtige Antwort.": "Multiple-choice questions need exactly four answers and one correct answer.",
+  "Lückentext-Fragen brauchen eine erwartete Antwort.": "Fill-in-the-blank questions need an expected answer.",
+  "Wahr/Falsch-Fragen brauchen die Lösung Wahr oder Falsch.": "True/False questions need the answer True or False.",
+  "Zahlfragen brauchen eine gültige Zahl und Einheit.": "Number questions need a valid number and unit.",
+  "Titel und Beschreibung sind erforderlich (maximal 100 bzw. 300 Zeichen).": "A title and description are required (maximum 100 and 300 characters respectively).",
+  "Passwort zurücksetzen": "Reset password",
+  "E-Mail-Adresse": "Email address",
+  "E-Mail-Adresse eingeben": "Enter your email address",
+  "Zurücksetzungslink senden": "Send reset link",
+  "Der Zurücksetzungslink ist ungültig oder abgelaufen.": "The reset link is invalid or expired.",
+  "Das Passwort wurde erfolgreich geändert.": "Your password was changed successfully.",
+  "Der E-Mail-Versand ist noch nicht konfiguriert.": "Email sending is not configured yet.",
+  "Die E-Mail konnte nicht versendet werden.": "The email could not be sent.",
+  "Bitte gib eine gültige E-Mail-Adresse ein.": "Please enter a valid email address.",
+  "Diese E-Mail-Adresse ist bereits registriert.": "This email address is already registered.",
+  "E-Mail-Adresse für den Reset-Link": "Email address for the reset link",
+  "Ein Link zum Zurücksetzen wurde versendet.": "A reset link has been sent.",
+  "Neues Passwort": "New password",
+  "Neues Passwort setzen": "Set new password",
+  "Passwort ändern": "Change password",
+  "Zurück zum Login": "Back to login",
+};
+const germanToSpanish: Record<string, string> = {
+  "Wann und wo wurde Roche gegründet?": "¿Cuándo y dónde se fundó Roche?",
+  "Welche beiden Bereiche bilden das Roche-Geschäft?": "¿Qué dos áreas forman el negocio de Roche?",
+  "Was möchte Roche für Patientinnen und Patienten erreichen?": "¿Qué quiere lograr Roche para los pacientes?",
+  "In welchen Bereichen forscht Roche unter anderem?": "¿En qué áreas investiga Roche, entre otras?",
+  "Warum sind Diagnostik und Früherkennung wichtig?": "¿Por qué son importantes el diagnóstico y la detección temprana?",
+  "Was bedeutet der kombinierte Ansatz von Roche?": "¿Qué significa el enfoque combinado de Roche?",
+  "Was unterstützt laut Roche den langfristigen Erfolg?": "Según Roche, ¿qué apoya el éxito a largo plazo?",
+  "Was ist bei einem möglichen Compliance-Verstoß ein verantwortungsvoller erster Schritt?": "¿Cuál es un primer paso responsable ante una posible infracción de cumplimiento?",
+  "Ergänze den Satz: Compliance bedeutet, Regeln einzuhalten und ___ zu handeln.": "Completa la frase: Cumplimiento significa respetar las reglas y actuar ___.",
+  "Übungsregel: Einen möglichen Compliance-Hinweis meldest du innerhalb von 2 Tagen. Wie viele Tage nennt diese Regel?": "Regla de práctica: informa de una posible preocupación de cumplimiento en un plazo de 2 días. ¿Cuántos días indica esta regla?",
+  "Welches Verhalten passt zu einem sorgfältigen Umgang mit personenbezogenen Daten?": "¿Qué comportamiento refleja un manejo cuidadoso de los datos personales?",
+  "Nur notwendige Daten verwenden, schützen und nicht ohne Grund weitergeben": "Utilizar solo los datos necesarios, protegerlos y no compartirlos sin motivo",
+  "Daten grundsätzlich öffentlich teilen": "Compartir los datos públicamente por defecto",
+  "Zugangsdaten an Kolleginnen und Kollegen weitergeben": "Compartir las credenciales de acceso con colegas",
+  "Datenschutzfragen ignorieren": "Ignorar las cuestiones de privacidad de datos",
+  "Roche Wissenstest": "Cuestionario de Roche",
+  "Roche entdecken": "Descubre Roche",
+  "Geschichte, Forschung und das Roche-Geschäft": "Historia, investigación y negocio de Roche",
+  "Compliance bei Roche": "Cumplimiento en Roche",
+  "Integrität, Datenschutz und Speak-up im Arbeitsalltag": "Integridad, privacidad de datos y speak-up en el trabajo diario",
+  "Diagnostik und Pharma": "Diagnóstico y productos farmacéuticos",
+  "Deine Antwort": "Tu respuesta",
+  "Zahl eingeben": "Introduce un número",
+  "Tage": "días",
+  "Rangliste": "Clasificación",
+  "Wissenstest": "Cuestionario",
+  "Serverseitig gespeichert": "Guardado en el servidor",
+  "Meine Ergebnisse": "Mis resultados",
+  "Noch keine Ergebnisse für dieses Quiz vorhanden.": "Aún no hay resultados para este cuestionario.",
+  "Versuch": "Intento",
+  "Versuche": "Intentos",
+  "Zurück zum Dashboard": "Volver al panel",
+  "Entdecke Roche und lerne die Organisation, ihre Forschung und ihre Arbeitsweise kennen.": "Descubre Roche y conoce la organización, su investigación y su forma de trabajar.",
+  "Quizze": "Cuestionarios",
+  "Anmelden": "Iniciar sesión",
+  "Registrieren": "Registrarse",
+  "Benutzername": "Nombre de usuario",
+  "Maximal 25 Zeichen": "Máximo 25 caracteres",
+  "Passwort": "Contraseña",
+  "Dein Passwort": "Tu contraseña",
+  "Passwort verbergen": "Ocultar contraseña",
+  "Passwort anzeigen": "Mostrar contraseña",
+  "Verbergen": "Ocultar",
+  "Anzeigen": "Mostrar",
+  "Bitte warten …": "Espera, por favor …",
+  "Dein Roche-Dashboard": "Tu panel de Roche",
+  "Abmelden": "Cerrar sesión",
+  "Bestehendes Quiz": "Cuestionario integrado",
+  "Eigenes Quiz": "Cuestionario personalizado",
+  "Dein bester Stand:": "Tu mejor resultado:",
+  "Noch kein Ergebnis": "Aún no hay resultados",
+  "Abgeschlossen:": "Completado:",
+  "Durchläufe": "Intentos",
+  "Nochmal spielen": "Jugar de nuevo",
+  "Quiz starten": "Iniciar cuestionario",
+  "Rangliste öffnen": "Abrir clasificación",
+  "Adminbereich öffnen": "Abrir área de administración",
+  "Account löschen": "Eliminar cuenta",
+  "Adminbereich": "Área de administración",
+  "Neues Quiz erstellen": "Crear cuestionario",
+  "Quizverwaltung": "Gestión de cuestionarios",
+  "Fragen": "Preguntas",
+  "Bearbeiten": "Editar",
+  "Löschen": "Eliminar",
+  "Benutzer": "Usuarios",
+  "Titel": "Título",
+  "Beschreibung": "Descripción",
+  "Frage": "Pregunta",
+  "Fragetext": "Texto de la pregunta",
+  "Lückentext": "Completar espacios",
+  "Zahleneingabe": "Entrada numérica",
+  "Wahr/Falsch": "Verdadero/Falso",
+  "Antwort": "Respuesta",
+  "Erwartete Antwort": "Respuesta esperada",
+  "Richtig: Wahr": "Correcto: Verdadero",
+  "Richtig: Falsch": "Correcto: Falso",
+  "Erwartete Zahl": "Número esperado",
+  "Einheit, z. B. Tage": "Unidad, p. ej. días",
+  "Frage entfernen": "Eliminar pregunta",
+  "Frage hinzufügen": "Añadir pregunta",
+  "Speichert …": "Guardando …",
+  "Quiz speichern": "Guardar cuestionario",
+  "Abbrechen": "Cancelar",
+  "abgeschlossen": "completado",
+  "richtige Antworten": "respuestas correctas",
+  "Danke, ": "Gracias, ",
+  "Zeit:": "Tiempo:",
+  "Dein Rang:": "Tu posición:",
+  "Platz": "puesto",
+  "Deine nächste Frage": "Tu próxima pregunta",
+  "Vergangene Zeit": "Tiempo transcurrido",
+  "Antwortmöglichkeiten": "Opciones de respuesta",
+  "Antwort eingeben": "Introduce una respuesta",
+  "Prüfen": "Comprobar",
+  "Wahr": "Verdadero",
+  "Falsch": "Falso",
+  "Richtig!": "¡Correcto!",
+  "Noch nicht richtig.": "Aún no es correcto.",
+  "Richtige Antwort:": "Respuesta correcta:",
+  "Ergebnis anzeigen": "Mostrar resultado",
+  "Weiter": "Siguiente",
+  "Prüfe dein Feedback und fahre dann fort.": "Revisa los comentarios y continúa.",
+  "Wähle eine Antwort aus.": "Elige una respuesta.",
+  "Wähle Wahr oder Falsch aus.": "Elige verdadero o falso.",
+  "Gib deine Antwort ein und prüfe sie.": "Introduce tu respuesta y compruébala.",
+  "1896 in der Schweiz": "1896 en Suiza",
+  "1925 in Deutschland": "1925 en Alemania",
+  "2001 in den USA": "2001 en EE. UU.",
+  "1880 in Frankreich": "1880 en Francia",
+  "Tourismus und Logistik": "Turismo y logística",
+  "Software und Bauwesen": "Software y construcción",
+  "Ernährung und Sport": "Nutrición y deporte",
+  "Krankheiten verhindern, stoppen und heilen": "Prevenir, detener y curar enfermedades",
+  "Nur bestehende Produkte verkaufen": "Vender solo productos existentes",
+  "Gesundheitsdaten sammeln, ohne sie auszuwerten": "Recopilar datos de salud sin analizarlos",
+  "Ausschließlich Krankenhäuser bauen": "Construir únicamente hospitales",
+  "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen": "Oncología, neurología y enfermedades cardiovasculares y metabólicas",
+  "Nur in der Raumfahrt": "Solo en el sector espacial",
+  "Ausschließlich in der Landwirtschaft": "Exclusivamente en la agricultura",
+  "Nur in der Unterhaltungselektronik": "Solo en electrónica de consumo",
+  "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden": "Las enfermedades pueden comprenderse antes y encontrar tratamientos adecuados más rápidamente",
+  "Damit Medikamente nicht geprüft werden müssen": "Para que no sea necesario probar los medicamentos",
+  "Damit Forschung überflüssig wird": "Para que la investigación deje de ser necesaria",
+  "Nur um Papier zu sparen": "Solo para ahorrar papel",
+  "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patientinnen und Patienten auszurichten": "Alinear el diagnóstico, las soluciones digitales y los medicamentos con las necesidades de los pacientes",
+  "Nur Medikamente ohne Tests zu entwickeln": "Desarrollar medicamentos sin pruebas",
+  "Alle Produkte identisch zu machen": "Hacer que todos los productos sean idénticos",
+  "Forschung durch Werbung zu ersetzen": "Sustituir la investigación por publicidad",
+  "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit": "Innovación, procesos eficaces, empleados comprometidos y sostenibilidad",
+  "Stillstand und möglichst wenige Ideen": "Estancamiento y el menor número posible de ideas",
+  "Arbeiten ohne Qualitätsstandards": "Trabajar sin estándares de calidad",
+  "Nur schnelle Entscheidungen ohne Prüfung": "Solo decisiones rápidas sin revisión",
+  "Die Beobachtung sachlich ansprechen und den vorgesehenen Speak-up-Weg nutzen": "Abordar la observación objetivamente y utilizar el canal de speak-up establecido",
+  "Das Thema absichtlich verschweigen": "Ocultar deliberadamente el asunto",
+  "Ungeprüfte Gerüchte weiterleiten": "Transmitir rumores no verificados",
+  "Passwörter anderer Personen verwenden": "Utilizar las contraseñas de otras personas",
+  "verantwortungsvoll": "responsablemente",
+  "verantwortungsbewusst": "de forma responsable",
+  "verantwortungsvoll oder verantwortungsbewusst": "responsablemente o de forma responsable",
+  "Light mode aktivieren": "Activar modo claro",
+  "Dark mode aktivieren": "Activar modo oscuro",
+  "Mindestens 12 Zeichen, Zahl, Groß-/Kleinbuchstabe und Sonderzeichen.": "Al menos 12 caracteres, un número, mayúsculas, minúsculas y un carácter especial.",
+  "Adminrechte erforderlich.": "Se requieren permisos de administrador.",
+  "Ungültige Benutzer-ID.": "ID de usuario no válida.",
+  "Benutzername oder Passwort ist nicht korrekt.": "El nombre de usuario o la contraseña no son correctos.",
+  "Das Passwort braucht mindestens 12 Zeichen, eine Zahl, einen Groß- und Kleinbuchstaben sowie ein Sonderzeichen.": "La contraseña debe tener al menos 12 caracteres, un número, mayúsculas, minúsculas y un carácter especial.",
+  "Dieser Benutzername ist bereits vergeben.": "Este nombre de usuario ya está en uso.",
+  "Die Registrierung konnte nicht abgeschlossen werden.": "No se pudo completar el registro.",
+  "Quiz nicht gefunden.": "No se encontró el cuestionario.",
+  "Bitte melde dich für deine Ergebnisse an.": "Inicia sesión para ver tus resultados.",
+  "Bitte melde dich zuerst an.": "Inicia sesión primero.",
+  "Ungültiges Ergebnis.": "Resultado no válido.",
+  "Ein Quiz braucht 1 bis 50 Fragen.": "Un cuestionario necesita entre 1 y 50 preguntas.",
+  "Jede Frage braucht gültige Angaben.": "Cada pregunta necesita datos válidos.",
+  "Jede Frage braucht Text und einen gültigen Fragetyp.": "Cada pregunta necesita texto y un tipo válido.",
+  "Multiple-Choice-Fragen brauchen genau vier Antworten und eine richtige Antwort.": "Las preguntas de opción múltiple necesitan exactamente cuatro respuestas y una correcta.",
+  "Lückentext-Fragen brauchen eine erwartete Antwort.": "Las preguntas para completar espacios necesitan una respuesta esperada.",
+  "Wahr/Falsch-Fragen brauchen die Lösung Wahr oder Falsch.": "Las preguntas de verdadero o falso necesitan la respuesta correspondiente.",
+  "Zahlfragen brauchen eine gültige Zahl und Einheit.": "Las preguntas numéricas necesitan un número y una unidad válidos.",
+  "Titel und Beschreibung sind erforderlich (maximal 100 bzw. 300 Zeichen).": "Se requieren un título y una descripción (máximo 100 y 300 caracteres respectivamente).",
+  "Passwort zurücksetzen": "Restablecer contraseña",
+  "E-Mail-Adresse": "Dirección de correo electrónico",
+  "E-Mail-Adresse eingeben": "Introduce tu dirección de correo electrónico",
+  "Zurücksetzungslink senden": "Enviar enlace de restablecimiento",
+  "Der Zurücksetzungslink ist ungültig oder abgelaufen.": "El enlace de restablecimiento no es válido o ha caducado.",
+  "Das Passwort wurde erfolgreich geändert.": "Tu contraseña se ha cambiado correctamente.",
+  "Der E-Mail-Versand ist noch nicht konfiguriert.": "El envío de correo aún no está configurado.",
+  "Die E-Mail konnte nicht versendet werden.": "No se pudo enviar el correo.",
+  "Bitte gib eine gültige E-Mail-Adresse ein.": "Introduce una dirección de correo válida.",
+  "Diese E-Mail-Adresse ist bereits registriert.": "Esta dirección de correo ya está registrada.",
+  "E-Mail-Adresse für den Reset-Link": "Dirección de correo para el enlace de restablecimiento",
+  "Ein Link zum Zurücksetzen wurde versendet.": "Se ha enviado un enlace de restablecimiento.",
+  "Neues Passwort": "Nueva contraseña",
+  "Neues Passwort setzen": "Establecer nueva contraseña",
+  "Passwort ändern": "Cambiar contraseña",
+  "Zurück zum Login": "Volver al inicio de sesión",
+};
+const germanToFrench: Record<string, string> = {
+  "Wann und wo wurde Roche gegründet?": "Quand et où Roche a-t-elle été fondée ?",
+  "Welche beiden Bereiche bilden das Roche-Geschäft?": "Quels sont les deux domaines qui composent les activités de Roche ?",
+  "Was möchte Roche für Patientinnen und Patienten erreichen?": "Que veut accomplir Roche pour les patients ?",
+  "In welchen Bereichen forscht Roche unter anderem?": "Dans quels domaines Roche fait-elle notamment de la recherche ?",
+  "Warum sind Diagnostik und Früherkennung wichtig?": "Pourquoi le diagnostic et la détection précoce sont-ils importants ?",
+  "Was bedeutet der kombinierte Ansatz von Roche?": "Que signifie l'approche combinée de Roche ?",
+  "Was unterstützt laut Roche den langfristigen Erfolg?": "Selon Roche, qu'est-ce qui favorise la réussite à long terme ?",
+  "Was ist bei einem möglichen Compliance-Verstoß ein verantwortungsvoller erster Schritt?": "Quelle est une première étape responsable en cas de possible violation de la conformité ?",
+  "Ergänze den Satz: Compliance bedeutet, Regeln einzuhalten und ___ zu handeln.": "Complétez la phrase : la conformité signifie respecter les règles et agir ___.",
+  "Übungsregel: Einen möglichen Compliance-Hinweis meldest du innerhalb von 2 Tagen. Wie viele Tage nennt diese Regel?": "Règle d'exercice : signalez un problème potentiel de conformité dans les 2 jours. Combien de jours cette règle indique-t-elle ?",
+  "Welches Verhalten passt zu einem sorgfältigen Umgang mit personenbezogenen Daten?": "Quel comportement correspond à une gestion prudente des données personnelles ?",
+  "Nur notwendige Daten verwenden, schützen und nicht ohne Grund weitergeben": "N'utiliser que les données nécessaires, les protéger et ne pas les partager sans raison",
+  "Daten grundsätzlich öffentlich teilen": "Partager les données publiquement par défaut",
+  "Zugangsdaten an Kolleginnen und Kollegen weitergeben": "Partager les identifiants avec des collègues",
+  "Datenschutzfragen ignorieren": "Ignorer les questions de protection des données",
+  "Roche Wissenstest": "Quiz Roche",
+  "Roche entdecken": "Découvrir Roche",
+  "Geschichte, Forschung und das Roche-Geschäft": "Histoire, recherche et activités de Roche",
+  "Compliance bei Roche": "Conformité chez Roche",
+  "Integrität, Datenschutz und Speak-up im Arbeitsalltag": "Intégrité, protection des données et speak-up au quotidien",
+  "Diagnostik und Pharma": "Diagnostic et produits pharmaceutiques",
+  "Deine Antwort": "Votre réponse",
+  "Zahl eingeben": "Saisissez un nombre",
+  "Tage": "jours",
+  "Rangliste": "Classement",
+  "Wissenstest": "Quiz",
+  "Serverseitig gespeichert": "Enregistré sur le serveur",
+  "Meine Ergebnisse": "Mes résultats",
+  "Noch keine Ergebnisse für dieses Quiz vorhanden.": "Aucun résultat pour ce quiz pour le moment.",
+  "Versuch": "Tentative",
+  "Versuche": "Tentatives",
+  "Zurück zum Dashboard": "Retour au tableau de bord",
+  "Entdecke Roche und lerne die Organisation, ihre Forschung und ihre Arbeitsweise kennen.": "Découvrez Roche, son organisation, ses recherches et sa façon de travailler.",
+  "Quizze": "Quiz",
+  "Anmelden": "Se connecter",
+  "Registrieren": "S'inscrire",
+  "Benutzername": "Nom d'utilisateur",
+  "Maximal 25 Zeichen": "25 caractères maximum",
+  "Passwort": "Mot de passe",
+  "Dein Passwort": "Votre mot de passe",
+  "Passwort verbergen": "Masquer le mot de passe",
+  "Passwort anzeigen": "Afficher le mot de passe",
+  "Verbergen": "Masquer",
+  "Anzeigen": "Afficher",
+  "Bitte warten …": "Veuillez patienter …",
+  "Dein Roche-Dashboard": "Votre tableau de bord Roche",
+  "Abmelden": "Se déconnecter",
+  "Bestehendes Quiz": "Quiz intégré",
+  "Eigenes Quiz": "Quiz personnalisé",
+  "Dein bester Stand:": "Votre meilleur résultat :",
+  "Noch kein Ergebnis": "Aucun résultat",
+  "Abgeschlossen:": "Terminé :",
+  "Durchläufe": "Tentatives",
+  "Nochmal spielen": "Rejouer",
+  "Quiz starten": "Démarrer le quiz",
+  "Rangliste öffnen": "Ouvrir le classement",
+  "Adminbereich öffnen": "Ouvrir l'administration",
+  "Account löschen": "Supprimer le compte",
+  "Adminbereich": "Administration",
+  "Neues Quiz erstellen": "Créer un quiz",
+  "Quizverwaltung": "Gestion des quiz",
+  "Fragen": "Questions",
+  "Bearbeiten": "Modifier",
+  "Löschen": "Supprimer",
+  "Benutzer": "Utilisateurs",
+  "Titel": "Titre",
+  "Beschreibung": "Description",
+  "Frage": "Question",
+  "Fragetext": "Texte de la question",
+  "Lückentext": "Texte à compléter",
+  "Zahleneingabe": "Saisie numérique",
+  "Wahr/Falsch": "Vrai/Faux",
+  "Antwort": "Réponse",
+  "Erwartete Antwort": "Réponse attendue",
+  "Richtig: Wahr": "Correct : Vrai",
+  "Richtig: Falsch": "Correct : Faux",
+  "Erwartete Zahl": "Nombre attendu",
+  "Einheit, z. B. Tage": "Unité, p. ex. jours",
+  "Frage entfernen": "Supprimer la question",
+  "Frage hinzufügen": "Ajouter une question",
+  "Speichert …": "Enregistrement …",
+  "Quiz speichern": "Enregistrer le quiz",
+  "Abbrechen": "Annuler",
+  "abgeschlossen": "terminé",
+  "richtige Antworten": "bonnes réponses",
+  "Danke, ": "Merci, ",
+  "Zeit:": "Temps :",
+  "Dein Rang:": "Votre classement :",
+  "Platz": "place",
+  "Deine nächste Frage": "Votre prochaine question",
+  "Vergangene Zeit": "Temps écoulé",
+  "Antwortmöglichkeiten": "Options de réponse",
+  "Antwort eingeben": "Saisissez une réponse",
+  "Prüfen": "Vérifier",
+  "Wahr": "Vrai",
+  "Falsch": "Faux",
+  "Richtig!": "Correct !",
+  "Noch nicht richtig.": "Ce n'est pas encore correct.",
+  "Richtige Antwort:": "Bonne réponse :",
+  "Ergebnis anzeigen": "Afficher le résultat",
+  "Weiter": "Suivant",
+  "Prüfe dein Feedback und fahre dann fort.": "Consultez les commentaires, puis continuez.",
+  "Wähle eine Antwort aus.": "Choisissez une réponse.",
+  "Wähle Wahr oder Falsch aus.": "Choisissez vrai ou faux.",
+  "Gib deine Antwort ein und prüfe sie.": "Saisissez votre réponse et vérifiez-la.",
+  "Light mode aktivieren": "Activer le mode clair",
+  "Dark mode aktivieren": "Activer le mode sombre",
+  "Mindestens 12 Zeichen, Zahl, Groß-/Kleinbuchstabe und Sonderzeichen.": "Au moins 12 caractères, un chiffre, des majuscules, des minuscules et un caractère spécial.",
+  "Adminrechte erforderlich.": "Droits d'administration requis.",
+  "Ungültige Benutzer-ID.": "Identifiant utilisateur invalide.",
+  "Benutzername oder Passwort ist nicht korrekt.": "Le nom d'utilisateur ou le mot de passe est incorrect.",
+  "Das Passwort braucht mindestens 12 Zeichen, eine Zahl, einen Groß- und Kleinbuchstaben sowie ein Sonderzeichen.": "Le mot de passe doit contenir au moins 12 caractères, un chiffre, des majuscules, des minuscules et un caractère spécial.",
+  "Dieser Benutzername ist bereits vergeben.": "Ce nom d'utilisateur est déjà utilisé.",
+  "Die Registrierung konnte nicht abgeschlossen werden.": "L'inscription n'a pas pu être terminée.",
+  "Quiz nicht gefunden.": "Quiz introuvable.",
+  "Bitte melde dich für deine Ergebnisse an.": "Connectez-vous pour voir vos résultats.",
+  "Bitte melde dich zuerst an.": "Veuillez d'abord vous connecter.",
+  "Ungültiges Ergebnis.": "Résultat invalide.",
+  "Ein Quiz braucht 1 bis 50 Fragen.": "Un quiz nécessite de 1 à 50 questions.",
+  "Jede Frage braucht gültige Angaben.": "Chaque question doit contenir des informations valides.",
+  "Jede Frage braucht Text und einen gültigen Fragetyp.": "Chaque question doit contenir du texte et un type valide.",
+  "Multiple-Choice-Fragen brauchen genau vier Antworten und eine richtige Antwort.": "Les questions à choix multiple nécessitent exactement quatre réponses dont une correcte.",
+  "Lückentext-Fragen brauchen eine erwartete Antwort.": "Les textes à compléter nécessitent une réponse attendue.",
+  "Wahr/Falsch-Fragen brauchen die Lösung Wahr oder Falsch.": "Les questions vrai/faux nécessitent la réponse correspondante.",
+  "Zahlfragen brauchen eine gültige Zahl und Einheit.": "Les questions numériques nécessitent un nombre et une unité valides.",
+  "Titel und Beschreibung sind erforderlich (maximal 100 bzw. 300 Zeichen).": "Un titre et une description sont requis (100 et 300 caractères maximum respectivement).",
+  "Passwort zurücksetzen": "Réinitialiser le mot de passe",
+  "E-Mail-Adresse": "Adresse e-mail",
+  "E-Mail-Adresse eingeben": "Saisissez votre adresse e-mail",
+  "Zurücksetzungslink senden": "Envoyer le lien de réinitialisation",
+  "Der Zurücksetzungslink ist ungültig oder abgelaufen.": "Le lien de réinitialisation est invalide ou expiré.",
+  "Das Passwort wurde erfolgreich geändert.": "Votre mot de passe a été modifié.",
+  "Der E-Mail-Versand ist noch nicht konfiguriert.": "L'envoi d'e-mails n'est pas encore configuré.",
+  "Die E-Mail konnte nicht versendet werden.": "L'e-mail n'a pas pu être envoyé.",
+  "Bitte gib eine gültige E-Mail-Adresse ein.": "Saisissez une adresse e-mail valide.",
+  "Diese E-Mail-Adresse ist bereits registriert.": "Cette adresse e-mail est déjà enregistrée.",
+  "E-Mail-Adresse für den Reset-Link": "Adresse e-mail pour le lien de réinitialisation",
+  "Ein Link zum Zurücksetzen wurde versendet.": "Un lien de réinitialisation a été envoyé.",
+  "Neues Passwort": "Nouveau mot de passe",
+  "Neues Passwort setzen": "Définir un nouveau mot de passe",
+  "Passwort ändern": "Modifier le mot de passe",
+  "Zurück zum Login": "Retour à la connexion",
+};
+const localizedToGerman = new Map<string, string>([
+  ...Object.entries(germanToEnglish).map(([german, translated]) => [translated, german] as const),
+  ...Object.entries(germanToSpanish).map(([german, translated]) => [translated, german] as const),
+  ...Object.entries(germanToFrench).map(([german, translated]) => [translated, german] as const),
+]);
+function translateText(value: string, language: Language): string {
+  const germanValue = localizedToGerman.get(value) ?? value;
+  if (language === "en") return germanToEnglish[germanValue] ?? germanValue;
+  if (language === "es") return germanToSpanish[germanValue] ?? germanValue;
+  if (language === "fr") return germanToFrench[germanValue] ?? germanValue;
+  return germanValue;
+}
+function localizeQuestion(question: Question, language: Language): Question {
+  if (language === "de") return question;
+  if (question.kind === "multiple-choice") return { ...question, question: translateText(question.question, language), answers: question.answers.map((answer) => ({ ...answer, text: translateText(answer.text, language) })) };
+  if (question.kind === "text") return { ...question, question: translateText(question.question, language), placeholder: translateText(question.placeholder, language), expectedAnswers: question.expectedAnswers.map((answer) => translateText(answer, language)), feedbackAnswer: translateText(question.feedbackAnswer, language) };
+  if (question.kind === "number") return { ...question, question: translateText(question.question, language), placeholder: translateText(question.placeholder, language), unit: translateText(question.unit, language), feedbackAnswer: translateText(question.feedbackAnswer, language) };
+  return { ...question, question: translateText(question.question, language) };
+}
+function localizeQuiz(quiz: QuizDefinition, language: Language): QuizDefinition {
+  return { ...quiz, title: translateText(quiz.title, language), description: translateText(quiz.description, language), questions: quiz.questions.map((question) => localizeQuestion(question, language)) };
+}
+
+// Quiz 1 behält die bisherigen Roche-Fragen und das vorhandene Gründungsvideo.
+const quiz1Questions: MultipleChoiceQuestion[] = [
+  { id: "founding", kind: "multiple-choice", question: "Wann und wo wurde Roche gegründet?", answers: [{ text: "1896 in der Schweiz", correct: true }, { text: "1925 in Deutschland", correct: false }, { text: "2001 in den USA", correct: false }, { text: "1880 in Frankreich", correct: false }] },
+  { id: "business", kind: "multiple-choice", question: "Welche beiden Bereiche bilden das Roche-Geschäft?", answers: [{ text: "Diagnostik und Pharma", correct: true }, { text: "Tourismus und Logistik", correct: false }, { text: "Software und Bauwesen", correct: false }, { text: "Ernährung und Sport", correct: false }] },
+  { id: "patients", kind: "multiple-choice", question: "Was möchte Roche für Patientinnen und Patienten erreichen?", answers: [{ text: "Krankheiten verhindern, stoppen und heilen", correct: true }, { text: "Nur bestehende Produkte verkaufen", correct: false }, { text: "Gesundheitsdaten sammeln, ohne sie auszuwerten", correct: false }, { text: "Ausschließlich Krankenhäuser bauen", correct: false }] },
+  { id: "research", kind: "multiple-choice", question: "In welchen Bereichen forscht Roche unter anderem?", answers: [{ text: "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen", correct: true }, { text: "Nur in der Raumfahrt", correct: false }, { text: "Ausschließlich in der Landwirtschaft", correct: false }, { text: "Nur in der Unterhaltungselektronik", correct: false }] },
+  { id: "early-detection", kind: "multiple-choice", question: "Warum sind Diagnostik und Früherkennung wichtig?", answers: [{ text: "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden", correct: true }, { text: "Damit Medikamente nicht geprüft werden müssen", correct: false }, { text: "Damit Forschung überflüssig wird", correct: false }, { text: "Nur um Papier zu sparen", correct: false }] },
+  { id: "combined-approach", kind: "multiple-choice", question: "Was bedeutet der kombinierte Ansatz von Roche?", answers: [{ text: "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patientinnen und Patienten auszurichten", correct: true }, { text: "Nur Medikamente ohne Tests zu entwickeln", correct: false }, { text: "Alle Produkte identisch zu machen", correct: false }, { text: "Forschung durch Werbung zu ersetzen", correct: false }] },
+  { id: "success", kind: "multiple-choice", question: "Was unterstützt laut Roche den langfristigen Erfolg?", answers: [{ text: "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit", correct: true }, { text: "Stillstand und möglichst wenige Ideen", correct: false }, { text: "Arbeiten ohne Qualitätsstandards", correct: false }, { text: "Nur schnelle Entscheidungen ohne Prüfung", correct: false }] },
+];
+
+// Quiz 2 behandelt allgemeine, sichere Compliance-Grundsätze statt unbelegter Roche-Zahlen.
+const quiz2Questions: Question[] = [
+  { id: "speak-up", kind: "multiple-choice", question: "Was ist bei einem möglichen Compliance-Verstoß ein verantwortungsvoller erster Schritt?", answers: [{ text: "Die Beobachtung sachlich ansprechen und den vorgesehenen Speak-up-Weg nutzen", correct: true }, { text: "Das Thema absichtlich verschweigen", correct: false }, { text: "Ungeprüfte Gerüchte weiterleiten", correct: false }, { text: "Passwörter anderer Personen verwenden", correct: false }] },
+  { id: "integrity", kind: "text", question: "Ergänze den Satz: Compliance bedeutet, Regeln einzuhalten und ___ zu handeln.", placeholder: "Deine Antwort", expectedAnswers: ["verantwortungsvoll", "verantwortungsbewusst"], feedbackAnswer: "verantwortungsvoll oder verantwortungsbewusst" },
+  { id: "reporting-window", kind: "number", question: "Übungsregel: Einen möglichen Compliance-Hinweis meldest du innerhalb von 2 Tagen. Wie viele Tage nennt diese Regel?", placeholder: "Zahl eingeben", expectedNumber: 2, unit: "Tage", feedbackAnswer: "2 Tage" },
+  { id: "privacy", kind: "multiple-choice", question: "Welches Verhalten passt zu einem sorgfältigen Umgang mit personenbezogenen Daten?", answers: [{ text: "Nur notwendige Daten verwenden, schützen und nicht ohne Grund weitergeben", correct: true }, { text: "Daten grundsätzlich öffentlich teilen", correct: false }, { text: "Zugangsdaten an Kolleginnen und Kollegen weitergeben", correct: false }, { text: "Datenschutzfragen ignorieren", correct: false }] },
+];
+
+const systemQuizzes: Record<string, QuizDefinition> = {
+  quiz1: { id: "quiz1", title: "Roche entdecken", description: "Geschichte, Forschung und das Roche-Geschäft", questions: quiz1Questions, isSystem: true },
+  quiz2: { id: "quiz2", title: "Compliance bei Roche", description: "Integrität, Datenschutz und Speak-up im Arbeitsalltag", questions: quiz2Questions, isSystem: true },
+};
+
+function shuffle<T>(items: T[]): T[] {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+function createQuiz(quiz: QuizDefinition): Question[] {
+  const source = quiz.questions;
+  const ordered = quiz.id === "quiz1" ? [source[0], ...shuffle(source.slice(1))] : shuffle(source);
+  return ordered.map((question) => question.kind === "multiple-choice" ? { ...question, answers: shuffle(question.answers) } : { ...question });
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function normalizeAnswer(value: string): string {
+  return value.trim().toLocaleLowerCase("de-DE").replace(/[.,!?]/g, "");
+}
+
+function emptyDraftQuestion(): DraftQuestion {
+  return { kind: "multiple-choice", question: "", answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: "", expectedNumber: "", unit: "", expectedBoolean: true };
+}
+
+function draftFromQuestion(question: Question): DraftQuestion {
+  if (question.kind === "true-false") {
+    return { kind: question.kind, question: question.question, answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: "", expectedNumber: "", unit: "", expectedBoolean: question.expectedBoolean };
+  }
+  if (question.kind === "multiple-choice") {
+    return { kind: question.kind, question: question.question, answers: question.answers.map((answer) => answer.text), correctIndex: Math.max(0, question.answers.findIndex((answer) => answer.correct)), expectedAnswer: "", expectedNumber: "", unit: "", expectedBoolean: true };
+  }
+  if (question.kind === "text") {
+    return { kind: question.kind, question: question.question, answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: question.expectedAnswers[0] ?? "", expectedNumber: "", unit: "", expectedBoolean: true };
+  }
+  return { kind: question.kind, question: question.question, answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: "", expectedNumber: String(question.expectedNumber), unit: question.unit, expectedBoolean: true };
+}
+
+export default function Home() {
+  const [language, setLanguage] = useState<Language>(() => {
+    if (typeof window === "undefined") return "en";
+    const value = new URLSearchParams(window.location.search).get("lang");
+    return value === "de" || value === "en" || value === "es" || value === "fr" ? value : "en";
+  });
+  const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+  const t = (value: string) => translateText(value, language);
+  const languageMenuLabel = language === "de" ? "Sprache auswählen" : language === "es" ? "Elegir idioma" : language === "fr" ? "Choisir la langue" : "Choose language";
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPasswordReset, setShowPasswordReset] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authError, setAuthError] = useState("");
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [availableQuizzes, setAvailableQuizzes] = useState<QuizDefinition[]>(() => Object.values(systemQuizzes).map((quiz) => localizeQuiz(quiz, "en")));
+  const [activeQuizId, setActiveQuizId] = useState<QuizId>("quiz1");
+  const [rankingQuizId, setRankingQuizId] = useState<QuizId>("quiz1");
+  const [rankingView, setRankingView] = useState<"global" | "mine">("global");
+  const [questions, setQuestions] = useState<Question[]>(() => createQuiz(localizeQuiz(systemQuizzes.quiz1, "en")));
+  const [current, setCurrent] = useState(0);
+  const [answersByQuestion, setAnswersByQuestion] = useState<Array<boolean | null>>(() => Array(quiz1Questions.length).fill(null));
+  const [answerDraft, setAnswerDraft] = useState("");
+  const [answerError, setAnswerError] = useState("");
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [ranking, setRanking] = useState<QuizResult[]>([]);
+  const [bestByQuiz, setBestByQuiz] = useState<Partial<Record<QuizId, QuizResult | null>>>({});
+  const [savedResult, setSavedResult] = useState<QuizResult | null>(null);
+  const [showRanking, setShowRanking] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [showQuizCreator, setShowQuizCreator] = useState(false);
+  const [editingQuizId, setEditingQuizId] = useState<QuizId | null>(null);
+  const [quizCreateError, setQuizCreateError] = useState("");
+  const [quizCreating, setQuizCreating] = useState(false);
+  const [newQuizTitle, setNewQuizTitle] = useState("");
+  const [newQuizDescription, setNewQuizDescription] = useState("");
+  const [draftQuestions, setDraftQuestions] = useState<DraftQuestion[]>([]);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const quizStartedAt = useRef<number | null>(null);
+  const elapsedRef = useRef(0);
+
+  const activeQuiz = availableQuizzes.find((quiz) => quiz.id === activeQuizId) ?? systemQuizzes[activeQuizId] ?? systemQuizzes.quiz1;
+  const question = questions[current] ?? questions[0];
+  const score = answersByQuestion.filter(Boolean).length;
+  const isDevMode = name.trim() === "1234567899";
+  const showFoundingVideo = activeQuizId === "quiz1" && question?.id === "founding";
+  const progress = finished ? 100 : ((current + (feedback ? 1 : 0)) / questions.length) * 100;
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
+  useEffect(() => {
+    void fetch("/api/quizzes").then((response) => response.json()).then((data: { quizzes?: QuizDefinition[] }) => {
+      const serverQuizzes = data.quizzes ?? [];
+      const visibleSystemQuizzes = serverQuizzes
+        .filter((quiz) => quiz.id === "quiz1" || quiz.id === "quiz2")
+        .map((quiz) => ({ ...systemQuizzes[quiz.id], ...(quiz.questions?.length ? quiz : {}), isSystem: true }));
+      const customQuizzes = serverQuizzes.filter((quiz) => quiz.id !== "quiz1" && quiz.id !== "quiz2");
+      setAvailableQuizzes([...visibleSystemQuizzes, ...customQuizzes.map((quiz) => ({ ...localizeQuiz(quiz, language), isSystem: false }))].map((quiz) => localizeQuiz(quiz, language)));
+    }).catch(() => undefined);
+  }, [language]);
+
+  useEffect(() => {
+    void fetch("/api/auth/me").then((response) => response.json()).then((data: { user: User | null }) => {
+      if (data.user) {
+        setUser(data.user);
+        setName(data.user.username);
+      }
+    }).catch(() => undefined);
+  }, []);
+
+  // Lädt die globalen Bestwerte für die Karten im Dashboard.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBestResults() {
+      const responses = await Promise.all(availableQuizzes.map((quiz) => fetch(`/api/leaderboard?quizId=${encodeURIComponent(quiz.id)}&view=global`)));
+      const data = await Promise.all(responses.map((response) => response.json() as Promise<{ quizId?: string; myResult?: QuizResult | null }>));
+      if (cancelled) return;
+      const nextBest: Partial<Record<QuizId, QuizResult | null>> = {};
+      data.forEach((item) => {
+        if (item.quizId) nextBest[item.quizId] = item.myResult ?? null;
+      });
+      setBestByQuiz(nextBest);
+    }
+    void loadBestResults().catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [availableQuizzes, user]);
+
+  // Lädt je nach Umschalter entweder die globale Rangliste oder die eigene Historie.
+  useEffect(() => {
+    if (!showRanking) return;
+    let cancelled = false;
+    async function loadRanking() {
+      const response = await fetch(`/api/leaderboard?quizId=${encodeURIComponent(rankingQuizId)}&view=${rankingView}`);
+      const data = await response.json() as { results?: QuizResult[]; error?: string };
+      if (cancelled) return;
+      if (!response.ok) {
+        setRanking([]);
+        setAuthError(translateText(data.error ?? "Die Rangliste konnte nicht geladen werden.", language));
+        return;
+      }
+      setRanking(data.results ?? []);
+      setAuthError("");
+    }
+    void loadRanking().catch(() => setAuthError(translateText("Die Rangliste konnte nicht geladen werden.", language)));
+    return () => { cancelled = true; };
+      }, [language, rankingQuizId, rankingView, showRanking]);
+
+  useEffect(() => {
+    if (!started || finished) return;
+    // Der Startzeitpunkt wird im Effekt gesetzt, damit Rendern rein und stabil bleibt.
+    if (quizStartedAt.current === null) quizStartedAt.current = Date.now();
+    const timer = window.setInterval(() => {
+      const nextElapsedMs = Date.now() - (quizStartedAt.current ?? Date.now());
+      elapsedRef.current = nextElapsedMs;
+      setElapsedMs(nextElapsedMs);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [started, finished]);
+
+  function beginQuiz(quizId: QuizId) {
+    const quiz = availableQuizzes.find((item) => item.id === quizId) ?? systemQuizzes[quizId];
+    if (!quiz) return;
+    const nextQuestions = createQuiz(localizeQuiz(quiz, language));
+    setActiveQuizId(quizId);
+    setQuestions(nextQuestions);
+    setCurrent(0);
+    setAnswersByQuestion(Array(nextQuestions.length).fill(null));
+    setAnswerDraft("");
+    setAnswerError("");
+    setFeedback(null);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setElapsedMs(0);
+    elapsedRef.current = 0;
+    quizStartedAt.current = null;
+    setStarted(true);
+  }
+
+  function updateDraftQuestion(index: number, changes: Partial<DraftQuestion>) {
+    setDraftQuestions((previous) => previous.map((question, questionIndex) => questionIndex === index ? { ...question, ...changes } : question));
+  }
+
+  function updateDraftAnswer(questionIndex: number, answerIndex: number, value: string) {
+    setDraftQuestions((previous) => previous.map((question, index) => {
+      if (index !== questionIndex) return question;
+      const answers = [...question.answers];
+      answers[answerIndex] = value;
+      return { ...question, answers };
+    }));
+  }
+
+  function editQuiz(quiz: QuizDefinition) {
+    setEditingQuizId(quiz.id);
+    setNewQuizTitle(quiz.title);
+    setNewQuizDescription(quiz.description);
+    setDraftQuestions(quiz.questions.map(draftFromQuestion));
+    setQuizCreateError("");
+    setShowQuizCreator(true);
+  }
+
+  async function deleteCustomQuiz(quizId: QuizId) {
+    const quiz = availableQuizzes.find((item) => item.id === quizId);
+    if (!quiz || !window.confirm(language === "en" ? `Do you really want to delete the quiz “${quiz.title}”? High scores will also be removed.` : `Möchtest du das Quiz „${quiz.title}“ wirklich löschen? Highscores werden ebenfalls entfernt.`)) return;
+    try {
+      const response = await fetch("/api/quizzes", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quizId }) });
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        setQuizCreateError(data.error ?? "Das Quiz konnte nicht gelöscht werden.");
+        return;
+      }
+      setAvailableQuizzes((previous) => previous.filter((item) => item.id !== quizId));
+      setBestByQuiz((previous) => { const next = { ...previous }; delete next[quizId]; return next; });
+      if (rankingQuizId === quizId) setRankingQuizId("quiz1");
+      if (activeQuizId === quizId) setActiveQuizId("quiz1");
+      if (editingQuizId === quizId) { setShowQuizCreator(false); setEditingQuizId(null); }
+    } catch {
+      setQuizCreateError(t("Der Server ist momentan nicht erreichbar."));
+    }
+  }
+
+  async function saveNewQuiz(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setQuizCreateError("");
+    if (!newQuizTitle.trim() || !newQuizDescription.trim() || draftQuestions.length === 0) {
+      setQuizCreateError(t("Bitte gib Titel, Beschreibung und mindestens eine Frage ein."));
+      return;
+    }
+    setQuizCreating(true);
+    try {
+      const response = await fetch("/api/quizzes", {
+        method: editingQuizId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(editingQuizId ? { quizId: editingQuizId } : {}),
+          title: newQuizTitle,
+          description: newQuizDescription,
+          questions: draftQuestions.map((question) => question.kind === "multiple-choice"
+            ? { kind: question.kind, question: question.question, answers: question.answers, correctIndex: question.correctIndex }
+            : question.kind === "text"
+              ? { kind: question.kind, question: question.question, expectedAnswer: question.expectedAnswer }
+              : question.kind === "true-false"
+                ? { kind: question.kind, question: question.question, expectedBoolean: question.expectedBoolean }
+                : { kind: question.kind, question: question.question, expectedNumber: Number(question.expectedNumber), unit: question.unit }),
+        }),
+      });
+      const data = await response.json() as { quiz?: QuizDefinition; error?: string };
+      if (!response.ok || !data.quiz) {
+        setQuizCreateError(t(data.error ?? "Das Quiz konnte nicht gespeichert werden."));
+        return;
+      }
+      const savedQuiz = data.quiz as QuizDefinition;
+      setAvailableQuizzes((previous) => editingQuizId ? previous.map((quiz) => quiz.id === savedQuiz.id ? savedQuiz : quiz) : [...previous, savedQuiz]);
+      setNewQuizTitle("");
+      setNewQuizDescription("");
+      setDraftQuestions([]);
+      setEditingQuizId(null);
+      setShowQuizCreator(false);
+    } catch {
+      setQuizCreateError(t("Der Server ist momentan nicht erreichbar."));
+    } finally {
+      setQuizCreating(false);
+    }
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("resetToken");
+    if (token) {
+      setResetToken(token);
+      setShowPasswordReset(true);
+    }
+  }, []);
+
+  async function requestPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResetMessage("");
+    const response = await fetch("/api/auth/password-reset/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: resetEmail, language }),
+    });
+    const data = await response.json().catch(() => ({})) as { message?: string; error?: string };
+    setResetMessage(data.error ?? "Ein Link zum Zurücksetzen wurde versendet.");
+  }
+
+  async function confirmPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResetMessage("");
+    const response = await fetch("/api/auth/password-reset/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: resetToken, password: resetPassword }),
+    });
+    const data = await response.json().catch(() => ({})) as { message?: string; error?: string };
+    setResetMessage(data.error ?? data.message ?? "Das Passwort wurde erfolgreich geändert.");
+    if (response.ok) {
+      setResetToken("");
+      setResetPassword("");
+    }
+  }
+
+  // Anmeldung und Registrierung führen bewusst nur zum Dashboard, nicht direkt zum Quiz.
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cleanName = name.trim();
+    if (!cleanName || cleanName.length > 25) {
+      setAuthError(t("Der Benutzername muss 1 bis 25 Zeichen lang sein."));
+      return;
+    }
+    if (!password) {
+      setAuthError(t("Bitte gib dein Passwort ein."));
+      return;
+    }
+    if (authMode === "register" && !email.trim()) {
+      setAuthError(t("Bitte gib eine gültige E-Mail-Adresse ein."));
+      return;
+    }
+
+    setLoading(true);
+    setAuthError("");
+    try {
+      const response = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: cleanName, email: email.trim(), password }),
+      });
+      const data = await response.json() as { user?: User; error?: string };
+      if (!response.ok || !data.user) {
+        setAuthError(t(data.error ?? "Die Anmeldung ist fehlgeschlagen."));
+        return;
+      }
+      setUser(data.user);
+      setName(data.user.username);
+      setPassword("");
+    } catch {
+      setAuthError(t("Der Server ist momentan nicht erreichbar."));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setUser(null);
+    setStarted(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setShowAdmin(false);
+    setPassword("");
+    setShowPassword(false);
+  }
+
+  async function deleteAccount() {
+    if (!window.confirm(t("Möchtest du deinen Account wirklich löschen? Deine Highscore-Daten werden ebenfalls entfernt."))) return;
+    const response = await fetch("/api/auth/delete", { method: "DELETE" });
+    if (!response.ok) {
+      setAuthError("Der Account konnte nicht gelöscht werden.");
+      return;
+    }
+    setUser(null);
+    setStarted(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowAdmin(false);
+    setPassword("");
+  }
+
+  async function loadAdminUsers() {
+    const response = await fetch("/api/admin/users");
+    const data = await response.json() as { users?: AdminUser[]; error?: string };
+    if (!response.ok) {
+      setAuthError(t(data.error ?? "Die Admin-Daten konnten nicht geladen werden."));
+      return;
+    }
+    setAdminUsers(data.users ?? []);
+    setShowAdmin(true);
+  }
+
+  async function deleteAdminUser(userId: number) {
+    if (!window.confirm(t("Diesen Benutzer wirklich löschen?"))) return;
+    const response = await fetch("/api/admin/users", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      setAuthError(data.error ?? "Der Benutzer konnte nicht gelöscht werden.");
+      return;
+    }
+    setAdminUsers((users) => users.filter((item) => item.id !== userId));
+    setRanking((items) => items.filter((item) => item.id !== userId));
+    if (user?.id === userId) {
+      setUser(null);
+      setShowAdmin(false);
+      setStarted(false);
+      setFinished(false);
+      setSavedResult(null);
+      setPassword("");
+    }
+  }
+
+  async function submitScore(finalScore: number, finalElapsedMs: number) {
+    try {
+      const response = await fetch("/api/quiz/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quizId: activeQuizId, correct: finalScore, total: questions.length, elapsedMs: finalElapsedMs }),
+      });
+      const data = await response.json() as { result?: Omit<QuizResult, "percentage" | "rank">; rank?: number | null; leaderboard?: QuizResult[]; error?: string };
+      if (!response.ok || !data.result) {
+        setAuthError(t(data.error ?? "Das Ergebnis konnte nicht gespeichert werden."));
+        return;
+      }
+      const result = { ...data.result, percentage: Math.round((data.result.correct / data.result.total) * 100), rank: data.rank ?? 0 };
+      setSavedResult(result);
+      setBestByQuiz((previous) => ({ ...previous, [activeQuizId]: result }));
+      if (data.leaderboard) setRanking(data.leaderboard);
+    } catch {
+      setAuthError(t("Das Ergebnis konnte nicht gespeichert werden."));
+    }
+  }
+
+  // Speichert eine Antwort und zeigt bei allen Fragetypen dasselbe Feedback an.
+  function recordAnswer(isCorrect: boolean, expected: string) {
+    setAnswersByQuestion((previousAnswers) => {
+      const updatedAnswers = [...previousAnswers];
+      updatedAnswers[current] = isCorrect;
+      return updatedAnswers;
+    });
+    setFeedback({ correct: isCorrect, expected });
+    setAnswerError("");
+  }
+
+  function chooseAnswer(answer: Answer) {
+    if (feedback) return;
+    recordAnswer(answer.correct, answer.text);
+  }
+
+  function chooseBooleanAnswer(value: boolean) {
+    if (feedback || question.kind !== "true-false") return;
+    recordAnswer(value === question.expectedBoolean, question.expectedBoolean ? t("Wahr") : t("Falsch"));
+  }
+
+  function submitFreeAnswer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (feedback) return;
+    setAnswerError("");
+    if (!answerDraft.trim()) {
+      setAnswerError(t("Bitte gib eine Antwort ein."));
+      return;
+    }
+    if (question.kind === "text") {
+      const normalized = normalizeAnswer(answerDraft);
+      const isCorrect = question.expectedAnswers.some((expected) => normalizeAnswer(expected) === normalized);
+      recordAnswer(isCorrect, question.feedbackAnswer);
+      return;
+    }
+    if (question.kind === "number") {
+      const isInteger = /^-?\d+$/.test(answerDraft.trim());
+      const isCorrect = isInteger && Number(answerDraft.trim()) === question.expectedNumber;
+      recordAnswer(isCorrect, question.feedbackAnswer);
+    }
+  }
+
+  // Erst nach dem sichtbaren Feedback geht es zur nächsten Frage oder zum Ergebnis.
+  function continueQuiz() {
+    if (!feedback) return;
+    if (current === questions.length - 1) {
+      const finalElapsedMs = elapsedRef.current;
+      setElapsedMs(finalElapsedMs);
+      setFinished(true);
+      void submitScore(score, finalElapsedMs);
+      return;
+    }
+    setCurrent((value) => value + 1);
+    setAnswerDraft("");
+    setAnswerError("");
+    setFeedback(null);
+  }
+
+  function selectLanguage(nextLanguage: Language) {
+    setLanguage(nextLanguage);
+    setShowLanguageMenu(false);
+    setStarted(false);
+    setFinished(false);
+    setShowRanking(false);
+    setShowAdmin(false);
+    setFeedback(null);
+    setAvailableQuizzes((quizzes) => quizzes.map((quiz) => quiz.isSystem ? localizeQuiz(systemQuizzes[quiz.id] ?? quiz, nextLanguage) : quiz));
+  }
+
+  function backToDashboard() {
+    setStarted(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setFeedback(null);
+    elapsedRef.current = 0;
+    quizStartedAt.current = null;
+  }
+
+  const pageBackground = darkMode ? "bg-[#101820] text-slate-100" : "bg-[#f4f7fa] text-[#172b4d]";
+  const cardBackground = darkMode ? "border-slate-700 bg-slate-900/95" : "border-slate-200 bg-white";
+  const mutedText = darkMode ? "text-slate-300" : "text-slate-600";
+  const answerColors = darkMode
+    ? ["border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/20", "border-red-400/50 bg-red-400/10 hover:bg-red-400/20", "border-yellow-400/50 bg-yellow-400/10 hover:bg-yellow-400/20", "border-emerald-400/50 bg-emerald-400/10 hover:bg-emerald-400/20"]
+    : ["border-blue-200 bg-blue-50 hover:bg-blue-100", "border-red-200 bg-red-50 hover:bg-red-100", "border-yellow-200 bg-yellow-50 hover:bg-yellow-100", "border-emerald-200 bg-emerald-50 hover:bg-emerald-100"];
+  const answerLetters = ["A", "B", "C", "D"];
+
+  return (
+    <main className={`relative min-h-screen overflow-x-hidden transition-colors duration-300 ${pageBackground}`}>
+      <div className="pointer-events-none absolute inset-0 opacity-60" aria-hidden="true"><div className="absolute -left-24 top-36 h-64 w-64 rounded-full border-[42px] border-red-500/60 [clip-path:inset(0_0_50%_0)] -rotate-12" /><div className="absolute -right-20 bottom-24 h-72 w-72 rounded-full border-[46px] border-yellow-400/60 [clip-path:inset(50%_0_0_0)] rotate-12" /><div className="absolute right-[12%] top-24 h-28 w-28 rotate-12 rounded-[42%_58%_65%_35%] border-[20px] border-blue-500/25" /></div>
+
+      <header className={`relative z-30 flex w-full items-center justify-between border-b px-5 py-4 shadow-sm lg:px-10 ${darkMode ? "border-slate-700 bg-[#101820]" : "border-slate-200 bg-white"}`}>
+        <div className="flex items-center gap-4"><Image src="/roche-logo.png" alt="Roche" width={150} height={60} priority unoptimized className="h-9 w-28 object-contain" /><span className={`hidden border-l pl-3 text-[10px] font-semibold tracking-[0.16em] sm:block ${mutedText}`}>DIAGNOSTICS &amp; PHARMA</span></div>
+        <div className="flex items-center gap-2"><button type="button" onClick={() => setShowRanking((value) => !value)} aria-pressed={showRanking} className={`rounded-lg border px-3 py-2 text-xs font-semibold transition hover:border-blue-700 hover:text-blue-700 ${darkMode ? "border-slate-600 text-slate-200" : "border-slate-200 text-slate-700"}`}>{t("Rangliste")}</button><div className="relative"><button type="button" onClick={() => setShowLanguageMenu((value) => !value)} className={`inline-flex h-9 w-12 items-center justify-center rounded-lg border text-lg leading-none transition hover:border-blue-700 hover:text-blue-700 ${darkMode ? "border-slate-600 text-slate-200" : "border-slate-200 text-slate-700"}`} aria-label={languageMenuLabel} aria-expanded={showLanguageMenu} title={languageMenuLabel}>🌐</button>{showLanguageMenu && <div className={`absolute right-0 top-11 z-20 grid min-w-36 gap-1 rounded-xl border p-2 shadow-xl ${darkMode ? "border-slate-600 bg-slate-800" : "border-slate-200 bg-white"}`}><button type="button" onClick={() => selectLanguage("de")} className="rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-slate-100">Deutsch</button><button type="button" onClick={() => selectLanguage("en")} className="rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-slate-100">English</button><button type="button" onClick={() => selectLanguage("es")} className="rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-slate-100">Español</button><button type="button" onClick={() => selectLanguage("fr")} className="rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-slate-100">Français</button></div>}</div><div className={`hidden text-xs font-semibold uppercase tracking-[0.18em] sm:block ${mutedText}`}>{t("Wissenstest")} <span className="ml-2 inline-block h-2 w-2 rounded-full bg-emerald-500" /></div></div>
+      </header>
+
+      <section className="relative z-10 mx-auto flex min-h-[calc(100vh-104px)] w-full max-w-6xl items-center justify-center px-6 pb-12 pt-8 lg:px-10">
+        {showRanking ? (
+          <section className={`w-full max-w-3xl rounded-[2rem] border p-8 shadow-2xl md:p-12 ${cardBackground}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-700">{t("Roche Wissenstest")}</p><h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl">{t("Rangliste")}</h1></div><span className={`rounded-full px-3 py-2 text-xs font-semibold ${darkMode ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-600"}`}>{t("Serverseitig gespeichert")}</span></div>
+            <div className={`mt-8 flex flex-wrap gap-2 rounded-xl p-1 ${darkMode ? "bg-slate-800" : "bg-slate-100"}`}>{availableQuizzes.map((quiz) => <button key={quiz.id} type="button" onClick={() => setRankingQuizId(quiz.id)} className={`rounded-lg px-3 py-2 text-sm font-semibold ${rankingQuizId === quiz.id ? "bg-blue-700 text-white" : mutedText}`}>{quiz.title}</button>)}</div>
+            <div className={`mt-3 grid grid-cols-2 rounded-xl p-1 ${darkMode ? "bg-slate-800" : "bg-slate-100"}`}><button type="button" onClick={() => setRankingView("global")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${rankingView === "global" ? "bg-blue-700 text-white" : mutedText}`}>Global</button><button type="button" onClick={() => setRankingView("mine")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${rankingView === "mine" ? "bg-blue-700 text-white" : mutedText}`}>{t("Meine Ergebnisse")}</button></div>
+            {ranking.length === 0 ? <p className={`mt-10 rounded-xl border border-dashed p-8 text-center ${mutedText}`}>{t("Noch keine Ergebnisse für dieses Quiz vorhanden.")}</p> : <ol className="mt-8 space-y-3" aria-label="Rangliste">{ranking.map((result) => <li key={`${result.quizId}-${result.id}`} className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${savedResult?.id === result.id && savedResult.quizId === result.quizId ? "border-blue-600 ring-2 ring-blue-200" : darkMode ? "border-slate-700 bg-slate-800/70" : "border-slate-200 bg-slate-50"}`}><span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-bold ${rankingView === "global" && result.rank === 1 ? "bg-yellow-300 text-yellow-950" : rankingView === "global" && result.rank === 2 ? "bg-slate-300 text-slate-800" : rankingView === "global" && result.rank === 3 ? "bg-orange-300 text-orange-950" : darkMode ? "bg-slate-700 text-slate-200" : "bg-white text-slate-600"}`}>{rankingView === "global" ? result.rank : result.attemptNumber}</span><span className="min-w-0 flex-1 truncate font-semibold">{result.username}{rankingView === "mine" && <span className={`ml-2 text-xs font-normal ${mutedText}`}>{t("Versuch")} {result.attemptNumber}</span>}</span><span className="text-right text-sm font-semibold"><strong>{result.correct}/{result.total}</strong><span className={`ml-2 text-xs font-normal ${mutedText}`}>{result.percentage}% · {formatElapsed(result.elapsedMs)} · {rankingView === "global" ? `${result.attempts ?? 0} ${t("Versuche")}` : new Date(result.completedAt).toLocaleDateString("de-DE")}</span></span></li>)}</ol>}
+            <button type="button" onClick={() => setShowRanking(false)} className="mt-8 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:bg-blue-800">{t("Zurück zum Dashboard")} <span aria-hidden="true">→</span></button>
+          </section>
+        ) : !user ? (
+          <div className={`grid w-full max-w-5xl gap-10 rounded-[2rem] border p-8 shadow-2xl md:grid-cols-[1.15fr_0.85fr] md:p-14 ${cardBackground}`}>
+            <div className="flex flex-col justify-center"><p className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-blue-700">{t("Roche Wissenstest")}</p><h1 className="max-w-xl text-4xl font-bold leading-tight tracking-tight md:text-6xl">Doing now what patients <span className="font-serif text-blue-700 italic tracking-tight">need next.</span></h1><p className={`mt-6 max-w-lg text-lg leading-8 ${mutedText}`}>{t("Entdecke Roche und lerne die Organisation, ihre Forschung und ihre Arbeitsweise kennen.")}</p><div className={`mt-8 flex gap-3 text-sm font-semibold ${mutedText}`}><span>{availableQuizzes.length} {t("Quizze")}</span></div></div>
+            <form className={`flex flex-col justify-center rounded-3xl p-6 ${darkMode ? "bg-slate-800" : "bg-slate-50"}`} onSubmit={handleAuth}><div className={`mb-5 grid grid-cols-2 rounded-xl p-1 ${darkMode ? "bg-slate-700" : "bg-white"}`}><button type="button" onClick={() => { setAuthMode("login"); setAuthError(""); }} className={`rounded-lg px-3 py-2 text-sm font-semibold ${authMode === "login" ? "bg-blue-700 text-white" : mutedText}`}>{t("Anmelden")}</button><button type="button" onClick={() => { setAuthMode("register"); setAuthError(""); }} className={`rounded-lg px-3 py-2 text-sm font-semibold ${authMode === "register" ? "bg-blue-700 text-white" : mutedText}`}>{t("Registrieren")}</button></div><label htmlFor="name" className="font-semibold">{t("Benutzername")}</label><input id="name" type="text" value={name} onChange={(event) => { setName(event.target.value); setAuthError(""); }} placeholder={t("Maximal 25 Zeichen") } maxLength={25} autoComplete="username" required className={`mt-3 rounded-xl border px-4 py-3 outline-none ring-blue-200 transition focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white placeholder:text-slate-400" : "border-slate-200 bg-white text-slate-900"}`} />{authMode === "register" && <><label htmlFor="email" className="mt-4 font-semibold">{t("E-Mail-Adresse")}</label><input id="email" type="email" value={email} onChange={(event) => { setEmail(event.target.value); setAuthError(""); }} placeholder={t("E-Mail-Adresse eingeben")} required className={`mt-3 rounded-xl border px-4 py-3 outline-none ring-blue-200 transition focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white placeholder:text-slate-400" : "border-slate-200 bg-white text-slate-900"}`} /></>}<label htmlFor="password" className="mt-4 font-semibold">{t("Passwort")}</label><div className="mt-3 flex gap-2"><input id="password" type={showPassword ? "text" : "password"} value={password} onChange={(event) => { setPassword(event.target.value); setAuthError(""); }} placeholder={t("Dein Passwort") } autoComplete={authMode === "login" ? "current-password" : "new-password"} required className={`min-w-0 flex-1 rounded-xl border px-4 py-3 outline-none ring-blue-200 transition focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white placeholder:text-slate-400" : "border-slate-200 bg-white text-slate-900"}`} /><button type="button" onClick={() => setShowPassword((value) => !value)} className={`rounded-xl border px-3 text-sm font-semibold ${darkMode ? "border-slate-600 text-slate-200" : "border-slate-200 text-slate-600"}`} aria-label={showPassword ? t("Passwort verbergen") : t("Passwort anzeigen")}>{showPassword ? t("Verbergen") : t("Anzeigen")}</button></div>{authMode === "register" && <small className={`mt-2 ${mutedText}`}>{t("Mindestens 12 Zeichen, Zahl, Groß-/Kleinbuchstabe und Sonderzeichen.")}</small>}{authError && <p className="mt-3 text-sm font-medium text-red-600">{t(authError)}</p>}<button className="mt-5 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60" type="submit" disabled={loading}>            {loading ? t("Bitte warten …") : authMode === "login" ? t("Anmelden") : t("Registrieren")} <span aria-hidden="true">→</span></button></form>{authMode === "login" && <button type="button" onClick={() => { setShowPasswordReset(true); setResetMessage(""); }} className="mt-4 text-sm font-semibold text-blue-700 underline">{t("Passwort zurücksetzen")}</button>}
+                        {showPasswordReset && <div className={`mt-4 rounded-2xl border p-4 ${darkMode ? "border-slate-600 bg-slate-700" : "border-slate-200 bg-white"}`}><h2 className="font-semibold">{resetToken ? t("Neues Passwort setzen") : t("Passwort zurücksetzen")}</h2>{resetToken ? <form onSubmit={confirmPasswordReset} className="mt-3 flex flex-col gap-3"><label htmlFor="reset-password">{t("Neues Passwort")}</label><input id="reset-password" type="password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} required className="rounded-xl border px-4 py-3" /><button type="submit" className="rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white">{t("Passwort ändern")}</button></form> : <form onSubmit={requestPasswordReset} className="mt-3 flex flex-col gap-3"><label htmlFor="reset-email">{t("E-Mail-Adresse für den Reset-Link")}</label><input id="reset-email" type="email" value={resetEmail} onChange={(event) => setResetEmail(event.target.value)} placeholder={t("E-Mail-Adresse eingeben")} required className="rounded-xl border px-4 py-3" /><button type="submit" className="rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white">{t("Zurücksetzungslink senden")}</button></form>}{resetMessage && <p className={`mt-3 text-sm font-medium ${resetMessage.includes("versendet") || resetMessage.includes("sent") || resetMessage.includes("envoyé") || resetMessage.includes("enviado") ? "text-emerald-600" : "text-red-600"}`}>{t(resetMessage)}</p>}</div>}
+                      </div>
+        ) : !started ? (
+          <div className={`w-full max-w-5xl rounded-[2rem] border p-8 shadow-2xl md:p-12 ${cardBackground}`}>
+            <div className="flex flex-wrap items-start justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-700">{t("Dein Roche-Dashboard")}</p><h1 className="mt-3 text-4xl font-bold tracking-tight md:text-6xl">Hallo, {user.username}.</h1><p className={`mt-4 max-w-2xl text-lg leading-8 ${mutedText}`}>{t("Wähle ein Quiz aus und entdecke Roche in deinem eigenen Tempo.")}</p></div><button type="button" onClick={() => void logout()} className={`rounded-xl border px-4 py-2 text-sm font-semibold ${darkMode ? "border-slate-600" : "border-slate-200"}`}>{t("Abmelden")}</button></div>
+            <div className="mt-10 grid gap-5 md:grid-cols-2">{availableQuizzes.map((quiz) => { const best = bestByQuiz[quiz.id]; return <article key={quiz.id} className={`rounded-2xl border p-6 ${darkMode ? "border-slate-700 bg-slate-800/70" : "border-slate-200 bg-slate-50"}`}><p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-700">{quiz.isSystem ? t("Bestehendes Quiz") : t("Eigenes Quiz")}</p><h2 className="mt-2 text-2xl font-bold">{quiz.title}</h2><p className={`mt-2 min-h-12 text-sm ${mutedText}`}>{quiz.description}</p><p className="mt-5 text-sm font-semibold">{t("Dein bester Stand:")} <strong className="text-blue-700">{best ? `${best.correct}/${best.total} · ${formatElapsed(best.elapsedMs)}` : t("Noch kein Ergebnis")}</strong></p><p className={`mt-1 text-sm ${mutedText}`}>{t("Abgeschlossen:")} {best?.attempts ?? 0} {t("Durchläufe")}</p><button type="button" onClick={() => beginQuiz(quiz.id)} className="mt-5 w-full rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:bg-blue-800">{best ? t("Nochmal spielen") : t("Quiz starten")} <span aria-hidden="true">→</span></button></article>; })}</div>
+            <div className="mt-8 flex flex-wrap items-center gap-4 border-t border-slate-200 pt-6"><button type="button" onClick={() => setShowRanking(true)} className="rounded-xl border border-blue-700 px-5 py-3 font-semibold text-blue-700">{t("Rangliste öffnen")}</button>{user.role === "admin" && <button type="button" onClick={() => void loadAdminUsers()} className="text-sm font-semibold text-blue-700 underline">{t("Adminbereich öffnen")}</button>}<button type="button" onClick={() => void deleteAccount()} className="text-sm font-semibold text-red-600 underline">{t("Account löschen")}</button></div>
+            {showAdmin && user.role === "admin" && <div className="mt-5 rounded-xl border border-slate-200 p-4 text-left"><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm font-semibold">{t("Adminbereich")}</p><button type="button" onClick={() => { setEditingQuizId(null); setNewQuizTitle(""); setNewQuizDescription(""); setDraftQuestions([emptyDraftQuestion()]); setShowQuizCreator(true); setQuizCreateError(""); }} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white">{t("Neues Quiz erstellen")}</button></div><div className="mt-4 rounded-lg bg-slate-50 p-3"><p className="mb-2 text-xs font-semibold">{t("Quizverwaltung")}</p>{availableQuizzes.map((quiz) => <div key={quiz.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 py-2 text-xs last:border-0"><span className="min-w-0 flex-1 truncate font-semibold">{quiz.title}{quiz.isSystem && <span className="ml-2 text-[10px] font-normal uppercase text-slate-500">{t("System")}</span>}</span><span className="text-slate-500">{quiz.questions.length} {t("Fragen")}</span><button type="button" onClick={() => editQuiz(quiz)} className="font-semibold text-blue-700 underline">{t("Bearbeiten")}</button><button type="button" onClick={() => void deleteCustomQuiz(quiz.id)} className="font-semibold text-red-600 underline">Löschen</button></div>)}</div><div className="mt-4 max-h-56 overflow-auto"><p className="mb-2 text-xs font-semibold">{t("Benutzer")}</p>{adminUsers.map((adminUser) => <div key={adminUser.id} className="flex items-center justify-between gap-2 border-b border-slate-100 py-2 text-xs last:border-0"><span className="min-w-0 truncate">{adminUser.username} {adminUser.role === "admin" && "(Admin)"}</span><button type="button" onClick={() => void deleteAdminUser(adminUser.id)} className="text-red-600 underline">{adminUser.id === user.id ? "Admin löschen" : "Löschen"}</button></div>)}</div>{showQuizCreator && <form onSubmit={saveNewQuiz} className="mt-5 border-t border-slate-200 pt-5"><h3 className="text-lg font-bold">{editingQuizId ? t("Quiz bearbeiten") : t("Neues Quiz erstellen")}</h3><div className="mt-3 grid gap-3 md:grid-cols-2"><input value={newQuizTitle} onChange={(event) => setNewQuizTitle(event.target.value)} maxLength={100} placeholder={t("Titel") } required className="rounded-lg border border-slate-200 px-3 py-2" /><input value={newQuizDescription} onChange={(event) => setNewQuizDescription(event.target.value)} maxLength={300} placeholder={t("Beschreibung") } required className="rounded-lg border border-slate-200 px-3 py-2" /></div><div className="mt-4 space-y-4">{draftQuestions.map((draft, questionIndex) => <fieldset key={questionIndex} className="rounded-xl border border-slate-200 p-4"><legend className="px-1 text-sm font-semibold">{t("Frage")} {questionIndex + 1}</legend><div className="grid gap-3 md:grid-cols-[1fr_180px]"><input value={draft.question} onChange={(event) => updateDraftQuestion(questionIndex, { question: event.target.value })} placeholder={t("Fragetext") } required className="rounded-lg border border-slate-200 px-3 py-2" /><select value={draft.kind} onChange={(event) => updateDraftQuestion(questionIndex, { kind: event.target.value as QuestionKind })} className="rounded-lg border border-slate-200 px-3 py-2"><option value="multiple-choice">Multiple Choice</option><option value="text">Lückentext</option><option value="number">{t("Zahleneingabe")}</option><option value="true-false">{t("Wahr/Falsch")}</option></select></div>{draft.kind === "multiple-choice" && <div className="mt-3 grid gap-2 sm:grid-cols-2">{draft.answers.map((answer, answerIndex) => <label key={answerIndex} className="flex items-center gap-2 text-sm"><input type="radio" name={`correct-${questionIndex}`} checked={draft.correctIndex === answerIndex} onChange={() => updateDraftQuestion(questionIndex, { correctIndex: answerIndex })} /><input value={answer} onChange={(event) => updateDraftAnswer(questionIndex, answerIndex, event.target.value)} placeholder={`${t("Antwort")} ${answerIndex + 1}`} required className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2" /></label>)}</div>}{draft.kind === "text" && <input value={draft.expectedAnswer} onChange={(event) => updateDraftQuestion(questionIndex, { expectedAnswer: event.target.value })} placeholder={t("Erwartete Antwort") } required className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2" />}{draft.kind === "true-false" && <select value={String(draft.expectedBoolean)} onChange={(event) => updateDraftQuestion(questionIndex, { expectedBoolean: event.target.value === "true" })} className="mt-3 rounded-lg border border-slate-200 px-3 py-2"><option value="true">{t("Richtig: Wahr")}</option><option value="false">{t("Richtig: Falsch")}</option></select>}{draft.kind === "number" && <div className="mt-3 grid gap-2 sm:grid-cols-2"><input type="number" value={draft.expectedNumber} onChange={(event) => updateDraftQuestion(questionIndex, { expectedNumber: event.target.value })} placeholder={t("Erwartete Zahl") } required className="rounded-lg border border-slate-200 px-3 py-2" /><input value={draft.unit} onChange={(event) => updateDraftQuestion(questionIndex, { unit: event.target.value })} placeholder={t("Einheit, z. B. Tage") } required className="rounded-lg border border-slate-200 px-3 py-2" /></div>}<button type="button" onClick={() => setDraftQuestions((previous) => previous.filter((_, index) => index !== questionIndex))} className="mt-3 ml-2 inline-block text-xs font-semibold text-red-600 underline" disabled={draftQuestions.length === 1}>{t("Frage entfernen")}</button></fieldset>)}</div><div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={() => setDraftQuestions((previous) => [...previous, emptyDraftQuestion()])} className="rounded-lg border border-blue-700 px-3 py-2 text-sm font-semibold text-blue-700">Frage hinzufügen</button><button type="submit" disabled={quizCreating} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{quizCreating ? "Speichert …" : "Quiz speichern"}</button><button type="button" onClick={() => { setShowQuizCreator(false); setEditingQuizId(null); setQuizCreateError(""); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">{t("Abbrechen")}</button></div>{quizCreateError && <p className="mt-3 text-sm font-medium text-red-600">{t(quizCreateError)}</p>}</form>}</div>}
+            {authError && <p className="mt-4 text-sm font-medium text-red-600">{authError}</p>}
+          </div>
+        ) : finished ? (
+          <div className={`w-full max-w-2xl rounded-[2rem] border p-8 text-center shadow-2xl md:p-14 ${cardBackground}`}><p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-700">{activeQuiz.title} {t("abgeschlossen")}</p><div className="my-8"><strong className="text-7xl font-bold text-blue-700">{score}<small className={`text-3xl ${mutedText}`}> / {questions.length}</small></strong><span className={`mt-2 block ${mutedText}`}>{t("richtige Antworten")}</span></div><h1 className="text-3xl font-bold">{t("Danke, ")} {name.trim()}!</h1><p className={`mt-3 ${mutedText}`}>{t("Zeit:")} {formatElapsed(elapsedMs)}</p>{savedResult && savedResult.rank && <p className="mt-4 text-lg font-semibold text-blue-700">{t("Dein Rang:")} {savedResult.rank}. {t("Platz")}</p>}{authError && <p className="mt-4 text-sm font-medium text-red-600">{t(authError)}</p>}<div className="my-8 flex justify-center gap-2" aria-label={`${score} von ${questions.length} Fragen richtig`}>{questions.map((item, index) => <span key={item.id} className={`h-3 w-8 rounded-full ${index < score ? "bg-blue-700" : darkMode ? "bg-slate-700" : "bg-slate-200"}`} />)}</div><div className="flex flex-wrap justify-center gap-3"><button className="rounded-xl bg-blue-700 px-6 py-3 font-semibold text-white transition hover:bg-blue-800" onClick={() => beginQuiz(activeQuizId)}>{t("Nochmal starten")} <span>↻</span></button><button type="button" onClick={backToDashboard} className={`rounded-xl border px-6 py-3 font-semibold ${darkMode ? "border-slate-600" : "border-slate-200"}`}>{t("Zum Dashboard")}</button><button type="button" onClick={() => { setRankingQuizId(activeQuizId); setShowRanking(true); }} className="rounded-xl border border-blue-700 px-6 py-3 font-semibold text-blue-700">{t("Rangliste")}</button></div></div>
+        ) : (
+          <div className={`w-full max-w-4xl rounded-[2rem] border p-8 shadow-2xl md:p-14 ${cardBackground}`}>
+            <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-700">{activeQuiz.title} · {name.trim()}</p><h1 className="mt-3 text-3xl font-bold md:text-5xl">{t("Deine nächste Frage")}</h1></div><div className="text-right"><strong className="text-4xl text-blue-700">{String(current + 1).padStart(2, "0")}</strong><span className={`block text-sm ${mutedText}`}>/ {String(questions.length).padStart(2, "0")}</span><span className={`mt-2 block text-sm font-semibold ${mutedText}`} aria-label={t("Vergangene Zeit")}>{t("Zeit:")} {formatElapsed(elapsedMs)}</span></div></div>
+            <div className={`mt-8 h-2 overflow-hidden rounded-full ${darkMode ? "bg-slate-700" : "bg-slate-100"}`}><span className="block h-full rounded-full bg-blue-700 transition-all duration-300" style={{ width: `${progress}%` }} /></div>
+            {question && <><p className="mt-10 text-2xl font-semibold leading-relaxed md:text-3xl">{question.question}</p>{showFoundingVideo && <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-black shadow-lg"><video className="aspect-video w-full" controls preload="metadata" title={t("Screenrecording zur Gründung von Roche")}><source src="/Bildschirmaufnahme%202026-10-13%20104014.mp4" type="video/mp4" />{t("Dein Browser unterstützt dieses Videoformat nicht.")}</video></div>}
+              {question.kind === "multiple-choice" ? <div className="mt-8 grid gap-4 md:grid-cols-2" role="group" aria-label={t("Antwortmöglichkeiten")}>{question.answers.map((answer, index) => <button key={answer.text} type="button" disabled={Boolean(feedback)} className={`flex min-h-20 items-center gap-4 rounded-2xl border-2 px-5 py-4 text-left font-medium transition hover:-translate-y-0.5 disabled:cursor-default disabled:hover:translate-y-0 ${answerColors[index]} ${isDevMode && answer.correct ? "font-extrabold" : ""}`} onClick={() => chooseAnswer(answer)}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/80 text-sm font-bold text-slate-700">{answerLetters[index]}</span><span>{answer.text}</span></button>)}</div> : question.kind === "true-false" ? <div className="mt-8 grid gap-4 sm:grid-cols-2" role="group" aria-label={`${t("Wahr")} oder ${t("Falsch")}`}><button type="button" disabled={Boolean(feedback)} onClick={() => chooseBooleanAnswer(true)} className="min-h-20 rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-5 py-4 text-lg font-semibold text-emerald-900 disabled:opacity-60">{t("Wahr")}</button><button type="button" disabled={Boolean(feedback)} onClick={() => chooseBooleanAnswer(false)} className="min-h-20 rounded-2xl border-2 border-red-200 bg-red-50 px-5 py-4 text-lg font-semibold text-red-900 disabled:opacity-60">{t("Falsch")}</button></div> : <form onSubmit={submitFreeAnswer} className="mt-8 flex max-w-xl flex-col gap-3 sm:flex-row"><input type={question.kind === "number" ? "number" : "text"} inputMode={question.kind === "number" ? "numeric" : "text"} value={answerDraft} onChange={(event) => { setAnswerDraft(event.target.value); setAnswerError(""); }} placeholder={t(question.placeholder)} disabled={Boolean(feedback)} className={`min-w-0 flex-1 rounded-xl border px-4 py-3 outline-none ring-blue-200 focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white" : "border-slate-200 bg-white text-slate-900"}`} aria-label={t("Antwort eingeben")} /><button type="submit" disabled={Boolean(feedback)} className="rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white disabled:opacity-60">{t("Prüfen")}</button></form>}
+              {answerError && <p className="mt-3 text-sm font-medium text-red-600">{t(answerError)}</p>}
+              {feedback && <div className={`mt-8 rounded-2xl border p-5 ${feedback.correct ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-red-300 bg-red-50 text-red-900"}`} role="status"><p className="font-bold">{feedback.correct ? t("Richtig!") : t("Noch nicht richtig.")}</p>{!feedback.correct && <p className="mt-1 text-sm">{t("Richtige Antwort:")} {feedback.expected}</p>}<button type="button" onClick={continueQuiz} className="mt-4 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white">{current === questions.length - 1 ? t("Ergebnis anzeigen") : t("Weiter")} <span aria-hidden="true">→</span></button></div>}
+              <div className={`mt-8 flex flex-col gap-4 border-t pt-6 text-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? "border-slate-700 text-slate-300" : "border-slate-200 text-slate-600"}`}><span>{feedback ? t("Prüfe dein Feedback und fahre dann fort.") : question.kind === "multiple-choice" ? t("Wähle eine Antwort aus.") : question.kind === "true-false" ? t("Wähle Wahr oder Falsch aus.") : t("Gib deine Antwort ein und prüfe sie.")}</span><button type="button" onClick={backToDashboard} className="font-semibold text-blue-700 transition hover:text-blue-900">← {t("Dashboard")}</button></div>
+            </>}
+          </div>
+        )}
+      </section>
+
+      <footer className={`relative z-10 mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-6 pb-6 text-xs ${mutedText} lg:px-10`}><span>{t("Roche Wissenstest")}</span><span>Doing now what patients need next.</span><div className="flex items-center gap-4"><button type="button" onClick={() => setDarkMode((value) => !value)} className="font-semibold transition hover:text-blue-700" aria-label={darkMode ? t("Light mode aktivieren") : t("Dark mode aktivieren")}>{darkMode ? "☀ Light mode" : "☾ Night mode"}</button></div></footer>
+    </main>
+  );
+}
