@@ -1,0 +1,548 @@
+"use client";
+
+import Image from "next/image";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+
+type QuizId = string;
+type QuestionKind = "multiple-choice" | "text" | "number" | "true-false";
+type Answer = { text: string; correct: boolean };
+type MultipleChoiceQuestion = { id: string; kind: Extract<QuestionKind, "multiple-choice">; question: string; answers: Answer[] };
+type TextQuestion = { id: string; kind: Extract<QuestionKind, "text">; question: string; placeholder: string; expectedAnswers: string[]; feedbackAnswer: string };
+type NumberQuestion = { id: string; kind: Extract<QuestionKind, "number">; question: string; placeholder: string; expectedNumber: number; unit: string; feedbackAnswer: string };
+type TrueFalseQuestion = { id: string; kind: Extract<QuestionKind, "true-false">; question: string; expectedBoolean: boolean };
+type Question = MultipleChoiceQuestion | TextQuestion | NumberQuestion | TrueFalseQuestion;
+type QuizDefinition = { id: QuizId; title: string; description: string; questions: Question[]; isSystem?: boolean; questionCount?: number };
+type User = { id: number; username: string; role: "user" | "admin" };
+type AdminUser = { id: number; username: string; role: "user" | "admin"; bestCorrect: number | null; bestTotal: number | null; bestElapsedMs: number | null; bestCompletedAt: string | null; attempts: number };
+type QuizResult = { id: number; username: string; quizId: QuizId; correct: number; total: number; elapsedMs: number; percentage: number; completedAt: string; attempts?: number; attemptNumber?: number; rank?: number | null };
+type DraftQuestion = { kind: QuestionKind; question: string; answers: string[]; correctIndex: number; expectedAnswer: string; expectedNumber: string; unit: string; expectedBoolean: boolean };
+type Feedback = { correct: boolean; expected: string };
+
+// Quiz 1 behält die bisherigen Roche-Fragen und das vorhandene Gründungsvideo.
+const quiz1Questions: MultipleChoiceQuestion[] = [
+  { id: "founding", kind: "multiple-choice", question: "Wann und wo wurde Roche gegründet?", answers: [{ text: "1896 in der Schweiz", correct: true }, { text: "1925 in Deutschland", correct: false }, { text: "2001 in den USA", correct: false }, { text: "1880 in Frankreich", correct: false }] },
+  { id: "business", kind: "multiple-choice", question: "Welche beiden Bereiche bilden das Roche-Geschäft?", answers: [{ text: "Diagnostik und Pharma", correct: true }, { text: "Tourismus und Logistik", correct: false }, { text: "Software und Bauwesen", correct: false }, { text: "Ernährung und Sport", correct: false }] },
+  { id: "patients", kind: "multiple-choice", question: "Was möchte Roche für Patientinnen und Patienten erreichen?", answers: [{ text: "Krankheiten verhindern, stoppen und heilen", correct: true }, { text: "Nur bestehende Produkte verkaufen", correct: false }, { text: "Gesundheitsdaten sammeln, ohne sie auszuwerten", correct: false }, { text: "Ausschließlich Krankenhäuser bauen", correct: false }] },
+  { id: "research", kind: "multiple-choice", question: "In welchen Bereichen forscht Roche unter anderem?", answers: [{ text: "Onkologie, Neurologie sowie Herz-Kreislauf- und Stoffwechselerkrankungen", correct: true }, { text: "Nur in der Raumfahrt", correct: false }, { text: "Ausschließlich in der Landwirtschaft", correct: false }, { text: "Nur in der Unterhaltungselektronik", correct: false }] },
+  { id: "early-detection", kind: "multiple-choice", question: "Warum sind Diagnostik und Früherkennung wichtig?", answers: [{ text: "Erkrankungen können früher verstanden und passende Behandlungen schneller gefunden werden", correct: true }, { text: "Damit Medikamente nicht geprüft werden müssen", correct: false }, { text: "Damit Forschung überflüssig wird", correct: false }, { text: "Nur um Papier zu sparen", correct: false }] },
+  { id: "combined-approach", kind: "multiple-choice", question: "Was bedeutet der kombinierte Ansatz von Roche?", answers: [{ text: "Diagnostik, digitale Lösungen und Medikamente gemeinsam an den Bedürfnissen von Patientinnen und Patienten auszurichten", correct: true }, { text: "Nur Medikamente ohne Tests zu entwickeln", correct: false }, { text: "Alle Produkte identisch zu machen", correct: false }, { text: "Forschung durch Werbung zu ersetzen", correct: false }] },
+  { id: "success", kind: "multiple-choice", question: "Was unterstützt laut Roche den langfristigen Erfolg?", answers: [{ text: "Innovation, gute Abläufe, engagierte Mitarbeitende und Nachhaltigkeit", correct: true }, { text: "Stillstand und möglichst wenige Ideen", correct: false }, { text: "Arbeiten ohne Qualitätsstandards", correct: false }, { text: "Nur schnelle Entscheidungen ohne Prüfung", correct: false }] },
+];
+
+// Quiz 2 behandelt allgemeine, sichere Compliance-Grundsätze statt unbelegter Roche-Zahlen.
+const quiz2Questions: Question[] = [
+  { id: "speak-up", kind: "multiple-choice", question: "Was ist bei einem möglichen Compliance-Verstoß ein verantwortungsvoller erster Schritt?", answers: [{ text: "Die Beobachtung sachlich ansprechen und den vorgesehenen Speak-up-Weg nutzen", correct: true }, { text: "Das Thema absichtlich verschweigen", correct: false }, { text: "Ungeprüfte Gerüchte weiterleiten", correct: false }, { text: "Passwörter anderer Personen verwenden", correct: false }] },
+  { id: "integrity", kind: "text", question: "Ergänze den Satz: Compliance bedeutet, Regeln einzuhalten und ___ zu handeln.", placeholder: "Deine Antwort", expectedAnswers: ["verantwortungsvoll", "verantwortungsbewusst"], feedbackAnswer: "verantwortungsvoll oder verantwortungsbewusst" },
+  { id: "reporting-window", kind: "number", question: "Übungsregel: Einen möglichen Compliance-Hinweis meldest du innerhalb von 2 Tagen. Wie viele Tage nennt diese Regel?", placeholder: "Zahl eingeben", expectedNumber: 2, unit: "Tage", feedbackAnswer: "2 Tage" },
+  { id: "privacy", kind: "multiple-choice", question: "Welches Verhalten passt zu einem sorgfältigen Umgang mit personenbezogenen Daten?", answers: [{ text: "Nur notwendige Daten verwenden, schützen und nicht ohne Grund weitergeben", correct: true }, { text: "Daten grundsätzlich öffentlich teilen", correct: false }, { text: "Zugangsdaten an Kolleginnen und Kollegen weitergeben", correct: false }, { text: "Datenschutzfragen ignorieren", correct: false }] },
+];
+
+const systemQuizzes: Record<string, QuizDefinition> = {
+  quiz1: { id: "quiz1", title: "Roche entdecken", description: "Geschichte, Forschung und das Roche-Geschäft", questions: quiz1Questions, isSystem: true },
+  quiz2: { id: "quiz2", title: "Compliance bei Roche", description: "Integrität, Datenschutz und Speak-up im Arbeitsalltag", questions: quiz2Questions, isSystem: true },
+};
+
+function shuffle<T>(items: T[]): T[] {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+function createQuiz(quiz: QuizDefinition): Question[] {
+  const source = quiz.questions;
+  const ordered = quiz.id === "quiz1" ? [source[0], ...shuffle(source.slice(1))] : shuffle(source);
+  return ordered.map((question) => question.kind === "multiple-choice" ? { ...question, answers: shuffle(question.answers) } : { ...question });
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function normalizeAnswer(value: string): string {
+  return value.trim().toLocaleLowerCase("de-DE").replace(/[.,!?]/g, "");
+}
+
+function emptyDraftQuestion(): DraftQuestion {
+  return { kind: "multiple-choice", question: "", answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: "", expectedNumber: "", unit: "", expectedBoolean: true };
+}
+
+function draftFromQuestion(question: Question): DraftQuestion {
+  if (question.kind === "true-false") {
+    return { kind: question.kind, question: question.question, answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: "", expectedNumber: "", unit: "", expectedBoolean: question.expectedBoolean };
+  }
+  if (question.kind === "multiple-choice") {
+    return { kind: question.kind, question: question.question, answers: question.answers.map((answer) => answer.text), correctIndex: Math.max(0, question.answers.findIndex((answer) => answer.correct)), expectedAnswer: "", expectedNumber: "", unit: "", expectedBoolean: true };
+  }
+  if (question.kind === "text") {
+    return { kind: question.kind, question: question.question, answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: question.expectedAnswers[0] ?? "", expectedNumber: "", unit: "", expectedBoolean: true };
+  }
+  return { kind: question.kind, question: question.question, answers: ["", "", "", ""], correctIndex: 0, expectedAnswer: "", expectedNumber: String(question.expectedNumber), unit: question.unit, expectedBoolean: true };
+}
+
+export default function Home() {
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authError, setAuthError] = useState("");
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [availableQuizzes, setAvailableQuizzes] = useState<QuizDefinition[]>(() => Object.values(systemQuizzes));
+  const [activeQuizId, setActiveQuizId] = useState<QuizId>("quiz1");
+  const [rankingQuizId, setRankingQuizId] = useState<QuizId | "all">("quiz1");
+  const [rankingView, setRankingView] = useState<"global" | "mine" | "all">("global");
+  const [questions, setQuestions] = useState<Question[]>(() => createQuiz(systemQuizzes.quiz1));
+  const [current, setCurrent] = useState(0);
+  const [answersByQuestion, setAnswersByQuestion] = useState<Array<boolean | null>>(() => Array(quiz1Questions.length).fill(null));
+  const [answerDraft, setAnswerDraft] = useState("");
+  const [answerError, setAnswerError] = useState("");
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [ranking, setRanking] = useState<QuizResult[]>([]);
+  const [bestByQuiz, setBestByQuiz] = useState<Partial<Record<QuizId, QuizResult | null>>>({});
+  const [savedResult, setSavedResult] = useState<QuizResult | null>(null);
+  const [showRanking, setShowRanking] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [showQuizCreator, setShowQuizCreator] = useState(false);
+  const [editingQuizId, setEditingQuizId] = useState<QuizId | null>(null);
+  const [quizCreateError, setQuizCreateError] = useState("");
+  const [quizCreating, setQuizCreating] = useState(false);
+  const [newQuizTitle, setNewQuizTitle] = useState("");
+  const [newQuizDescription, setNewQuizDescription] = useState("");
+  const [draftQuestions, setDraftQuestions] = useState<DraftQuestion[]>([]);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const quizStartedAt = useRef<number | null>(null);
+  const elapsedRef = useRef(0);
+
+  const activeQuiz = availableQuizzes.find((quiz) => quiz.id === activeQuizId) ?? systemQuizzes[activeQuizId] ?? systemQuizzes.quiz1;
+  const question = questions[current] ?? questions[0];
+  const score = answersByQuestion.filter(Boolean).length;
+  const isDevMode = name.trim() === "1234567899";
+  const showFoundingVideo = activeQuizId === "quiz1" && question?.id === "founding";
+  const progress = finished ? 100 : ((current + (feedback ? 1 : 0)) / questions.length) * 100;
+
+  useEffect(() => {
+    void fetch("/api/quizzes").then((response) => response.json()).then((data: { quizzes?: QuizDefinition[] }) => {
+      const serverQuizzes = data.quizzes ?? [];
+      const visibleSystemQuizzes = serverQuizzes
+        .filter((quiz) => quiz.id === "quiz1" || quiz.id === "quiz2")
+        .map((quiz) => ({ ...systemQuizzes[quiz.id], ...(quiz.questions?.length ? quiz : {}), isSystem: true }));
+      const customQuizzes = serverQuizzes.filter((quiz) => quiz.id !== "quiz1" && quiz.id !== "quiz2");
+      setAvailableQuizzes([...visibleSystemQuizzes, ...customQuizzes.map((quiz) => ({ ...quiz, isSystem: false }))]);
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/auth/me").then((response) => response.json()).then((data: { user: User | null }) => {
+      if (data.user) {
+        setUser(data.user);
+        setName(data.user.username);
+      }
+    }).catch(() => undefined);
+  }, []);
+
+  // Lädt die globalen Bestwerte für die Karten im Dashboard.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBestResults() {
+      const responses = await Promise.all(availableQuizzes.map((quiz) => fetch(`/api/leaderboard?quizId=${encodeURIComponent(quiz.id)}&view=global`)));
+      const data = await Promise.all(responses.map((response) => response.json() as Promise<{ quizId?: string; myResult?: QuizResult | null }>));
+      if (cancelled) return;
+      const nextBest: Partial<Record<QuizId, QuizResult | null>> = {};
+      data.forEach((item) => {
+        if (item.quizId) nextBest[item.quizId] = item.myResult ?? null;
+      });
+      setBestByQuiz(nextBest);
+    }
+    void loadBestResults().catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [availableQuizzes, user]);
+
+  // Lädt je nach Umschalter entweder die globale Rangliste oder die eigene Historie.
+  useEffect(() => {
+    if (!showRanking) return;
+    let cancelled = false;
+    async function loadRanking() {
+      const response = await fetch(`/api/leaderboard?quizId=${encodeURIComponent(rankingQuizId)}&view=${rankingView}`);
+      const data = await response.json() as { results?: QuizResult[]; error?: string };
+      if (cancelled) return;
+      if (!response.ok) {
+        setRanking([]);
+        setAuthError(data.error ?? "Die Rangliste konnte nicht geladen werden.");
+        return;
+      }
+      setRanking(data.results ?? []);
+      setAuthError("");
+    }
+    void loadRanking().catch(() => setAuthError("Die Rangliste konnte nicht geladen werden."));
+    return () => { cancelled = true; };
+  }, [rankingQuizId, rankingView, showRanking]);
+
+  useEffect(() => {
+    if (!started || finished) return;
+    // Der Startzeitpunkt wird im Effekt gesetzt, damit Rendern rein und stabil bleibt.
+    if (quizStartedAt.current === null) quizStartedAt.current = Date.now();
+    const timer = window.setInterval(() => {
+      const nextElapsedMs = Date.now() - (quizStartedAt.current ?? Date.now());
+      elapsedRef.current = nextElapsedMs;
+      setElapsedMs(nextElapsedMs);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [started, finished]);
+
+  function beginQuiz(quizId: QuizId) {
+    const quiz = availableQuizzes.find((item) => item.id === quizId) ?? systemQuizzes[quizId];
+    if (!quiz) return;
+    const nextQuestions = createQuiz(quiz);
+    setActiveQuizId(quizId);
+    setQuestions(nextQuestions);
+    setCurrent(0);
+    setAnswersByQuestion(Array(nextQuestions.length).fill(null));
+    setAnswerDraft("");
+    setAnswerError("");
+    setFeedback(null);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setElapsedMs(0);
+    elapsedRef.current = 0;
+    quizStartedAt.current = null;
+    setStarted(true);
+  }
+
+  function updateDraftQuestion(index: number, changes: Partial<DraftQuestion>) {
+    setDraftQuestions((previous) => previous.map((question, questionIndex) => questionIndex === index ? { ...question, ...changes } : question));
+  }
+
+  function updateDraftAnswer(questionIndex: number, answerIndex: number, value: string) {
+    setDraftQuestions((previous) => previous.map((question, index) => {
+      if (index !== questionIndex) return question;
+      const answers = [...question.answers];
+      answers[answerIndex] = value;
+      return { ...question, answers };
+    }));
+  }
+
+  function editQuiz(quiz: QuizDefinition) {
+    setEditingQuizId(quiz.id);
+    setNewQuizTitle(quiz.title);
+    setNewQuizDescription(quiz.description);
+    setDraftQuestions(quiz.questions.map(draftFromQuestion));
+    setQuizCreateError("");
+    setShowQuizCreator(true);
+  }
+
+  async function deleteCustomQuiz(quizId: QuizId) {
+    const quiz = availableQuizzes.find((item) => item.id === quizId);
+    if (!quiz || !window.confirm(`Möchtest du das Quiz „${quiz.title}“ wirklich löschen? Highscores werden ebenfalls entfernt.`)) return;
+    try {
+      const response = await fetch("/api/quizzes", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quizId }) });
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        setQuizCreateError(data.error ?? "Das Quiz konnte nicht gelöscht werden.");
+        return;
+      }
+      setAvailableQuizzes((previous) => previous.filter((item) => item.id !== quizId));
+      setBestByQuiz((previous) => { const next = { ...previous }; delete next[quizId]; return next; });
+      if (rankingQuizId === quizId) setRankingQuizId("quiz1");
+      if (activeQuizId === quizId) setActiveQuizId("quiz1");
+      if (editingQuizId === quizId) { setShowQuizCreator(false); setEditingQuizId(null); }
+    } catch {
+      setQuizCreateError("Der Server ist momentan nicht erreichbar.");
+    }
+  }
+
+  async function saveNewQuiz(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setQuizCreateError("");
+    if (!newQuizTitle.trim() || !newQuizDescription.trim() || draftQuestions.length === 0) {
+      setQuizCreateError("Bitte gib Titel, Beschreibung und mindestens eine Frage ein.");
+      return;
+    }
+    setQuizCreating(true);
+    try {
+      const response = await fetch("/api/quizzes", {
+        method: editingQuizId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(editingQuizId ? { quizId: editingQuizId } : {}),
+          title: newQuizTitle,
+          description: newQuizDescription,
+          questions: draftQuestions.map((question) => question.kind === "multiple-choice"
+            ? { kind: question.kind, question: question.question, answers: question.answers, correctIndex: question.correctIndex }
+            : question.kind === "text"
+              ? { kind: question.kind, question: question.question, expectedAnswer: question.expectedAnswer }
+              : question.kind === "true-false"
+                ? { kind: question.kind, question: question.question, expectedBoolean: question.expectedBoolean }
+                : { kind: question.kind, question: question.question, expectedNumber: Number(question.expectedNumber), unit: question.unit }),
+        }),
+      });
+      const data = await response.json() as { quiz?: QuizDefinition; error?: string };
+      if (!response.ok || !data.quiz) {
+        setQuizCreateError(data.error ?? "Das Quiz konnte nicht gespeichert werden.");
+        return;
+      }
+      const savedQuiz = data.quiz as QuizDefinition;
+      setAvailableQuizzes((previous) => editingQuizId ? previous.map((quiz) => quiz.id === savedQuiz.id ? savedQuiz : quiz) : [...previous, savedQuiz]);
+      setNewQuizTitle("");
+      setNewQuizDescription("");
+      setDraftQuestions([]);
+      setEditingQuizId(null);
+      setShowQuizCreator(false);
+    } catch {
+      setQuizCreateError("Der Server ist momentan nicht erreichbar.");
+    } finally {
+      setQuizCreating(false);
+    }
+  }
+
+  // Anmeldung und Registrierung führen bewusst nur zum Dashboard, nicht direkt zum Quiz.
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cleanName = name.trim();
+    if (!cleanName || cleanName.length > 25) {
+      setAuthError("Der Benutzername muss 1 bis 25 Zeichen lang sein.");
+      return;
+    }
+    if (!password) {
+      setAuthError("Bitte gib dein Passwort ein.");
+      return;
+    }
+
+    setLoading(true);
+    setAuthError("");
+    try {
+      const response = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: cleanName, password }),
+      });
+      const data = await response.json() as { user?: User; error?: string };
+      if (!response.ok || !data.user) {
+        setAuthError(data.error ?? "Die Anmeldung ist fehlgeschlagen.");
+        return;
+      }
+      setUser(data.user);
+      setName(data.user.username);
+      setPassword("");
+    } catch {
+      setAuthError("Der Server ist momentan nicht erreichbar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setUser(null);
+    setStarted(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setShowAdmin(false);
+    setPassword("");
+    setShowPassword(false);
+  }
+
+  async function deleteAccount() {
+    if (!window.confirm("Möchtest du deinen Account wirklich löschen? Deine Highscore-Daten werden ebenfalls entfernt.")) return;
+    const response = await fetch("/api/auth/delete", { method: "DELETE" });
+    if (!response.ok) {
+      setAuthError("Der Account konnte nicht gelöscht werden.");
+      return;
+    }
+    setUser(null);
+    setStarted(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowAdmin(false);
+    setPassword("");
+  }
+
+  async function loadAdminUsers() {
+    const response = await fetch("/api/admin/users");
+    const data = await response.json() as { users?: AdminUser[]; error?: string };
+    if (!response.ok) {
+      setAuthError(data.error ?? "Die Admin-Daten konnten nicht geladen werden.");
+      return;
+    }
+    setAdminUsers(data.users ?? []);
+    setShowAdmin(true);
+  }
+
+  async function deleteAdminUser(userId: number) {
+    if (!window.confirm("Diesen Benutzer wirklich löschen?")) return;
+    const response = await fetch("/api/admin/users", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      setAuthError(data.error ?? "Der Benutzer konnte nicht gelöscht werden.");
+      return;
+    }
+    setAdminUsers((users) => users.filter((item) => item.id !== userId));
+    setRanking((items) => items.filter((item) => item.id !== userId));
+    if (user?.id === userId) {
+      setUser(null);
+      setShowAdmin(false);
+      setStarted(false);
+      setFinished(false);
+      setSavedResult(null);
+      setPassword("");
+    }
+  }
+
+  async function submitScore(finalScore: number, finalElapsedMs: number) {
+    try {
+      const response = await fetch("/api/quiz/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quizId: activeQuizId, correct: finalScore, total: questions.length, elapsedMs: finalElapsedMs }),
+      });
+      const data = await response.json() as { result?: Omit<QuizResult, "percentage" | "rank">; rank?: number | null; leaderboard?: QuizResult[]; error?: string };
+      if (!response.ok || !data.result) {
+        setAuthError(data.error ?? "Das Ergebnis konnte nicht gespeichert werden.");
+        return;
+      }
+      const result = { ...data.result, percentage: Math.round((data.result.correct / data.result.total) * 100), rank: data.rank ?? 0 };
+      setSavedResult(result);
+      setBestByQuiz((previous) => ({ ...previous, [activeQuizId]: result }));
+      if (data.leaderboard) setRanking(data.leaderboard);
+    } catch {
+      setAuthError("Das Ergebnis konnte nicht gespeichert werden.");
+    }
+  }
+
+  // Speichert eine Antwort und zeigt bei allen Fragetypen dasselbe Feedback an.
+  function recordAnswer(isCorrect: boolean, expected: string) {
+    setAnswersByQuestion((previousAnswers) => {
+      const updatedAnswers = [...previousAnswers];
+      updatedAnswers[current] = isCorrect;
+      return updatedAnswers;
+    });
+    setFeedback({ correct: isCorrect, expected });
+    setAnswerError("");
+  }
+
+  function chooseAnswer(answer: Answer) {
+    if (feedback) return;
+    recordAnswer(answer.correct, answer.text);
+  }
+
+  function chooseBooleanAnswer(value: boolean) {
+    if (feedback || question.kind !== "true-false") return;
+    recordAnswer(value === question.expectedBoolean, question.expectedBoolean ? "Wahr" : "Falsch");
+  }
+
+  function submitFreeAnswer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (feedback) return;
+    setAnswerError("");
+    if (!answerDraft.trim()) {
+      setAnswerError("Bitte gib eine Antwort ein.");
+      return;
+    }
+    if (question.kind === "text") {
+      const normalized = normalizeAnswer(answerDraft);
+      const isCorrect = question.expectedAnswers.some((expected) => normalizeAnswer(expected) === normalized);
+      recordAnswer(isCorrect, question.feedbackAnswer);
+      return;
+    }
+    if (question.kind === "number") {
+      const isInteger = /^-?\d+$/.test(answerDraft.trim());
+      const isCorrect = isInteger && Number(answerDraft.trim()) === question.expectedNumber;
+      recordAnswer(isCorrect, question.feedbackAnswer);
+    }
+  }
+
+  // Erst nach dem sichtbaren Feedback geht es zur nächsten Frage oder zum Ergebnis.
+  function continueQuiz() {
+    if (!feedback) return;
+    if (current === questions.length - 1) {
+      const finalElapsedMs = elapsedRef.current;
+      setElapsedMs(finalElapsedMs);
+      setFinished(true);
+      void submitScore(score, finalElapsedMs);
+      return;
+    }
+    setCurrent((value) => value + 1);
+    setAnswerDraft("");
+    setAnswerError("");
+    setFeedback(null);
+  }
+
+  function backToDashboard() {
+    setStarted(false);
+    setFinished(false);
+    setSavedResult(null);
+    setShowRanking(false);
+    setFeedback(null);
+    elapsedRef.current = 0;
+    quizStartedAt.current = null;
+  }
+
+  const pageBackground = darkMode ? "bg-black text-[#FFF7F5]" : "bg-[#FFF7F5] text-[#022366]";
+  const cardBackground = darkMode ? "border-slate-700 bg-black" : "border-slate-200 bg-white";
+  const mutedText = darkMode ? "text-slate-300" : "text-slate-600";
+  const answerColors = darkMode
+    ? ["border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/20", "border-red-400/50 bg-red-400/10 hover:bg-red-400/20", "border-yellow-400/50 bg-yellow-400/10 hover:bg-yellow-400/20", "border-emerald-400/50 bg-emerald-400/10 hover:bg-emerald-400/20"]
+    : ["border-blue-200 bg-blue-50 hover:bg-blue-100", "border-red-200 bg-red-50 hover:bg-red-100", "border-yellow-200 bg-yellow-50 hover:bg-yellow-100", "border-emerald-200 bg-emerald-50 hover:bg-emerald-100"];
+  const answerLetters = ["A", "B", "C", "D"];
+
+  return (
+    <main className={`relative min-h-screen overflow-hidden transition-colors duration-300 ${pageBackground}`}>
+      <div className="pointer-events-none absolute inset-0 opacity-60" aria-hidden="true"><div className="absolute -left-24 top-36 h-64 w-64 rounded-full border-[42px] border-red-500/60 [clip-path:inset(0_0_50%_0)] -rotate-12" /><div className="absolute -right-20 bottom-24 h-72 w-72 rounded-full border-[46px] border-yellow-400/60 [clip-path:inset(50%_0_0_0)] rotate-12" /><div className="absolute right-[12%] top-24 h-28 w-28 rotate-12 rounded-[42%_58%_65%_35%] border-[20px] border-blue-500/25" /></div>
+
+      <header className={`relative z-10 flex w-full items-center justify-between border-b px-5 py-4 shadow-sm lg:px-10 ${darkMode ? "border-slate-700 bg-black" : "border-slate-200 bg-white"}`}>
+        <div className="flex items-center gap-4"><Image src="/roche-logo.png" alt="Roche" width={150} height={60} priority unoptimized className="h-9 w-28 object-contain" /><span className={`hidden border-l pl-3 text-[10px] font-semibold tracking-[0.16em] sm:block ${mutedText}`}>DIAGNOSTICS &amp; PHARMA</span></div>
+        <div className="flex items-center gap-3"><button type="button" onClick={() => setShowRanking((value) => !value)} aria-pressed={showRanking} className={`rounded-lg border px-3 py-2 text-xs font-semibold transition hover:border-blue-700 hover:text-blue-700 ${darkMode ? "border-slate-600 text-slate-200" : "border-slate-200 text-slate-700"}`}>Rangliste</button><div className={`hidden text-xs font-semibold uppercase tracking-[0.18em] sm:block ${mutedText}`}>Wissenstest <span className="ml-2 inline-block h-2 w-2 rounded-full bg-emerald-500" /></div></div>
+      </header>
+
+      <section className="relative z-10 mx-auto flex min-h-[calc(100vh-104px)] w-full max-w-6xl items-center justify-center px-6 pb-12 pt-8 lg:px-10">
+        {showRanking ? (
+          <section className={`w-full max-w-3xl rounded-[2rem] border p-8 shadow-2xl md:p-12 ${cardBackground}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-700">Roche Wissenstest</p><h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl">Rangliste</h1></div><span className={`rounded-full px-3 py-2 text-xs font-semibold ${darkMode ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-600"}`}>Serverseitig gespeichert</span></div>
+            <div className={`scroll-area mt-8 overflow-x-auto overscroll-contain rounded-xl p-1 ${darkMode ? "dark-scroll-area bg-slate-800" : "bg-slate-100"}`}><div className="flex w-max min-w-full flex-nowrap gap-2"><button type="button" onClick={() => { setRankingQuizId("all"); setRankingView("all"); }} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${rankingQuizId === "all" ? "bg-blue-700 text-white" : mutedText}`}>Alle Quizze</button>{availableQuizzes.map((quiz) => <button key={quiz.id} type="button" onClick={() => { setRankingQuizId(quiz.id); setRankingView("global"); }} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${rankingQuizId === quiz.id ? "bg-blue-700 text-white" : mutedText}`}>{quiz.title}</button>)}</div></div>
+            <div className={`mt-3 grid grid-cols-3 rounded-xl p-1 ${darkMode ? "bg-slate-800" : "bg-slate-100"}`}><button type="button" onClick={() => setRankingView("global")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${rankingView === "global" ? "bg-blue-700 text-white" : mutedText}`}>Global</button><button type="button" onClick={() => setRankingView("mine")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${rankingView === "mine" ? "bg-blue-700 text-white" : mutedText}`}>Meine Ergebnisse</button><button type="button" onClick={() => { setRankingQuizId("all"); setRankingView("all"); }} className={`rounded-lg px-3 py-2 text-sm font-semibold ${rankingView === "all" ? "bg-blue-700 text-white" : mutedText}`}>Alle Ergebnisse</button></div>
+            {ranking.length === 0 ? <p className={`mt-10 rounded-xl border border-dashed p-8 text-center ${mutedText}`}>Noch keine Ergebnisse für dieses Quiz vorhanden.</p> : <div className={`scroll-area mt-8 overflow-x-auto overscroll-contain pb-2 ${darkMode ? "dark-scroll-area" : ""}`}><ol className="min-w-[42rem] space-y-3" aria-label="Rangliste">{ranking.map((result) => <li key={`${result.quizId}-${result.id}`} className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${savedResult?.id === result.id && savedResult.quizId === result.quizId ? "border-blue-600 ring-2 ring-blue-200" : darkMode ? "border-slate-700 bg-slate-800/70" : "border-slate-200 bg-slate-50"}`}><span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-bold ${(rankingView === "global" || rankingView === "all") && result.rank === 1 ? "bg-yellow-300 text-yellow-950" : (rankingView === "global" || rankingView === "all") && result.rank === 2 ? "bg-slate-300 text-slate-800" : (rankingView === "global" || rankingView === "all") && result.rank === 3 ? "bg-orange-300 text-orange-950" : darkMode ? "bg-slate-700 text-slate-200" : "bg-white text-slate-600"}`}>{rankingView === "mine" ? result.attemptNumber : result.rank}</span><span className="min-w-0 flex-1 truncate font-semibold">{result.username}{rankingView === "all" && <span className={`ml-2 text-xs font-normal ${mutedText}`}>{availableQuizzes.find((quiz) => quiz.id === result.quizId)?.title ?? result.quizId}</span>}{rankingView === "mine" && <span className={`ml-2 text-xs font-normal ${mutedText}`}>Versuch {result.attemptNumber}</span>}</span><span className="text-right text-sm font-semibold"><strong>{result.correct}/{result.total}</strong><span className={`ml-2 text-xs font-normal ${mutedText}`}>{result.percentage}% · {formatElapsed(result.elapsedMs)} · {rankingView === "global" ? `${result.attempts ?? 0} Versuche` : rankingView === "all" ? `Versuch ${result.attemptNumber} · ${new Date(result.completedAt).toLocaleDateString("de-DE")}` : new Date(result.completedAt).toLocaleDateString("de-DE")}</span></span></li>)}</ol></div>}
+            <button type="button" onClick={() => setShowRanking(false)} className="mt-8 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:bg-blue-800">Zurück zum Dashboard <span aria-hidden="true">→</span></button>
+          </section>
+        ) : !user ? (
+          <div className={`grid w-full max-w-5xl gap-10 rounded-[2rem] border p-8 shadow-2xl md:grid-cols-[1.15fr_0.85fr] md:p-14 ${cardBackground}`}>
+            <div className="flex flex-col justify-center"><p className="mb-4 text-xs font-bold uppercase tracking-[0.25em] text-blue-700">Roche Wissenstest</p><h1 className="max-w-xl text-4xl font-bold leading-tight tracking-tight md:text-6xl">Doing now what patients <span className="font-serif text-blue-700 italic tracking-tight">need next.</span></h1><p className={`mt-6 max-w-lg text-lg leading-8 ${mutedText}`}>Entdecke Roche und lerne die Organisation, ihre Forschung und ihre Arbeitsweise kennen.</p><div className={`mt-8 flex gap-3 text-sm font-semibold ${mutedText}`}><span>{availableQuizzes.length} Quizze</span></div></div>
+            <form className={`flex flex-col justify-center rounded-3xl p-6 ${darkMode ? "bg-slate-800" : "bg-slate-50"}`} onSubmit={handleAuth}><div className={`mb-5 grid grid-cols-2 rounded-xl p-1 ${darkMode ? "bg-slate-700" : "bg-white"}`}><button type="button" onClick={() => { setAuthMode("login"); setAuthError(""); }} className={`rounded-lg px-3 py-2 text-sm font-semibold ${authMode === "login" ? "bg-blue-700 text-white" : mutedText}`}>Anmelden</button><button type="button" onClick={() => { setAuthMode("register"); setAuthError(""); }} className={`rounded-lg px-3 py-2 text-sm font-semibold ${authMode === "register" ? "bg-blue-700 text-white" : mutedText}`}>Registrieren</button></div><label htmlFor="name" className="font-semibold">Benutzername</label><input id="name" type="text" value={name} onChange={(event) => { setName(event.target.value); setAuthError(""); }} placeholder="Maximal 25 Zeichen" maxLength={25} autoComplete="username" required className={`mt-3 rounded-xl border px-4 py-3 outline-none ring-blue-200 transition focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white placeholder:text-slate-400" : "border-slate-200 bg-white text-slate-900"}`} /><label htmlFor="password" className="mt-4 font-semibold">Passwort</label><div className="mt-3 flex gap-2"><input id="password" type={showPassword ? "text" : "password"} value={password} onChange={(event) => { setPassword(event.target.value); setAuthError(""); }} placeholder="Dein Passwort" autoComplete={authMode === "login" ? "current-password" : "new-password"} required className={`min-w-0 flex-1 rounded-xl border px-4 py-3 outline-none ring-blue-200 transition focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white placeholder:text-slate-400" : "border-slate-200 bg-white text-slate-900"}`} /><button type="button" onClick={() => setShowPassword((value) => !value)} className={`rounded-xl border px-3 text-sm font-semibold ${darkMode ? "border-slate-600 text-slate-200" : "border-slate-200 text-slate-600"}`} aria-label={showPassword ? "Passwort verbergen" : "Passwort anzeigen"}>{showPassword ? "Verbergen" : "Anzeigen"}</button></div>{authMode === "register" && <small className={`mt-2 ${mutedText}`}>Mindestens 12 Zeichen, Zahl, Groß-/Kleinbuchstabe und Sonderzeichen.</small>}{authError && <p className="mt-3 text-sm font-medium text-red-600">{authError}</p>}<button className="mt-5 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:-translate-y-0.5 hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60" type="submit" disabled={loading}>{loading ? "Bitte warten …" : authMode === "login" ? "Anmelden" : "Registrieren"} <span aria-hidden="true">→</span></button></form>
+          </div>
+        ) : !started ? (
+          <div className={`w-full max-w-5xl rounded-[2rem] border p-8 shadow-2xl md:p-12 ${cardBackground}`}>
+            <div className="flex flex-wrap items-start justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-700">Dein Roche-Dashboard</p><h1 className="mt-3 text-4xl font-bold tracking-tight md:text-6xl">Hallo, {user.username}.</h1><p className={`mt-4 max-w-2xl text-lg leading-8 ${mutedText}`}>Wähle ein Quiz aus und entdecke Roche in deinem eigenen Tempo.</p></div><button type="button" onClick={() => void logout()} className={`rounded-xl border px-4 py-2 text-sm font-semibold ${darkMode ? "border-slate-600" : "border-slate-200"}`}>Abmelden</button></div>
+            <div className="relative mt-10">
+              <div className={`scroll-area max-h-[32rem] overflow-y-auto overscroll-contain pr-2 pt-3 ${darkMode ? "dark-scroll-area" : ""}`}>
+                <div className="grid gap-5 md:grid-cols-2">{availableQuizzes.map((quiz) => { const best = bestByQuiz[quiz.id]; return <article key={quiz.id} className={`flex h-full flex-col rounded-2xl border p-6 ${darkMode ? "border-slate-700 bg-slate-800/70" : "border-slate-200 bg-slate-50"}`}><p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-700">{quiz.isSystem ? "Bestehendes Quiz" : "Eigenes Quiz"}</p><h2 className="mt-2 text-2xl font-bold">{quiz.title}</h2><p className={`mt-2 min-h-12 text-sm ${mutedText}`}>{quiz.description}</p><p className="mt-5 text-sm font-semibold">Dein bester Stand: <strong className="text-blue-700">{best ? `${best.correct}/${best.total} · ${formatElapsed(best.elapsedMs)}` : "Noch kein Ergebnis"}</strong></p><p className={`mt-1 text-sm ${mutedText}`}>Abgeschlossen: {best?.attempts ?? 0} Durchläufe</p><button type="button" onClick={() => beginQuiz(quiz.id)} className="mt-auto w-full rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white transition hover:bg-blue-800">{best ? "Nochmal spielen" : "Quiz starten"} <span aria-hidden="true">→</span></button></article>; })}</div>
+              </div>
+            </div>
+            <div className="mt-8 flex flex-wrap items-center gap-4 border-t border-slate-200 pt-6"><button type="button" onClick={() => setShowRanking(true)} className="rounded-xl border border-blue-700 px-5 py-3 font-semibold text-blue-700">Rangliste öffnen</button>{user.role === "admin" && <button type="button" onClick={() => void loadAdminUsers()} className="text-sm font-semibold text-blue-700 underline">Adminbereich öffnen</button>}<button type="button" onClick={() => void deleteAccount()} className="text-sm font-semibold text-red-600 underline">Account löschen</button></div>
+            {showAdmin && user.role === "admin" && <div className={`admin-panel mt-5 rounded-xl border p-4 text-left ${darkMode ? "dark-admin-panel border-slate-700 bg-slate-900/95 text-slate-100" : "border-slate-200 bg-white"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm font-semibold">Adminbereich</p><div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setEditingQuizId(null); setNewQuizTitle(""); setNewQuizDescription(""); setDraftQuestions([emptyDraftQuestion()]); setShowQuizCreator(true); setQuizCreateError(""); }} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white">Neues Quiz erstellen</button><button type="button" onClick={() => { setShowAdmin(false); setShowQuizCreator(false); setEditingQuizId(null); }} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${darkMode ? "border-slate-600 text-slate-200" : "border-slate-300 text-slate-700"}`}>Adminbereich schließen</button></div></div><div className={`admin-subpanel mt-4 rounded-lg p-3 ${darkMode ? "dark-admin-subpanel bg-slate-800" : "bg-slate-50"}`}><p className="mb-2 text-xs font-semibold">Quizverwaltung</p><div className={`scroll-area max-h-72 overflow-y-auto overscroll-contain pr-1 ${darkMode ? "dark-scroll-area" : ""}`}>{availableQuizzes.map((quiz) => <div key={quiz.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 py-2 text-xs last:border-0"><span className="min-w-0 flex-1 truncate font-semibold">{quiz.title}{quiz.isSystem && <span className="ml-2 text-[10px] font-normal uppercase text-slate-500">System</span>}</span><span className="text-slate-500">{quiz.questions.length} Fragen</span><button type="button" onClick={() => editQuiz(quiz)} className="font-semibold text-blue-700 underline">Bearbeiten</button><button type="button" onClick={() => void deleteCustomQuiz(quiz.id)} className="font-semibold text-red-600 underline">Löschen</button></div>)}</div></div><div className={`scroll-area mt-4 max-h-56 overflow-auto ${darkMode ? "dark-scroll-area" : ""}`}><p className="mb-2 text-xs font-semibold">Benutzer</p>{adminUsers.map((adminUser) => <div key={adminUser.id} className="flex items-center justify-between gap-2 border-b border-slate-100 py-2 text-xs last:border-0"><span className="min-w-0 truncate">{adminUser.username} {adminUser.role === "admin" && "(Admin)"}</span><button type="button" onClick={() => void deleteAdminUser(adminUser.id)} className="text-red-600 underline">{adminUser.id === user.id ? "Admin löschen" : "Löschen"}</button></div>)}</div>{showQuizCreator && <form onSubmit={saveNewQuiz} className="mt-5 border-t border-slate-200 pt-5"><h3 className="text-lg font-bold">{editingQuizId ? "Quiz bearbeiten" : "Neues Quiz erstellen"}</h3><div className="mt-3 grid gap-3 md:grid-cols-2"><input value={newQuizTitle} onChange={(event) => setNewQuizTitle(event.target.value)} maxLength={100} placeholder="Titel" required className="rounded-lg border border-slate-200 px-3 py-2" /><input value={newQuizDescription} onChange={(event) => setNewQuizDescription(event.target.value)} maxLength={300} placeholder="Beschreibung" required className="rounded-lg border border-slate-200 px-3 py-2" /></div><div className="mt-4 space-y-4">{draftQuestions.map((draft, questionIndex) => <fieldset key={questionIndex} className="rounded-xl border border-slate-200 p-4"><legend className="px-1 text-sm font-semibold">Frage {questionIndex + 1}</legend><div className="grid gap-3 md:grid-cols-[1fr_180px]"><input value={draft.question} onChange={(event) => updateDraftQuestion(questionIndex, { question: event.target.value })} placeholder="Fragetext" required className="rounded-lg border border-slate-200 px-3 py-2" /><select value={draft.kind} onChange={(event) => updateDraftQuestion(questionIndex, { kind: event.target.value as QuestionKind })} className="rounded-lg border border-slate-200 px-3 py-2"><option value="multiple-choice">Multiple Choice</option><option value="text">Lückentext</option><option value="number">Zahleneingabe</option><option value="true-false">Wahr/Falsch</option></select></div>{draft.kind === "multiple-choice" && <div className="mt-3 grid gap-2 sm:grid-cols-2">{draft.answers.map((answer, answerIndex) => <label key={answerIndex} className="flex items-center gap-2 text-sm"><input type="radio" name={`correct-${questionIndex}`} checked={draft.correctIndex === answerIndex} onChange={() => updateDraftQuestion(questionIndex, { correctIndex: answerIndex })} /><input value={answer} onChange={(event) => updateDraftAnswer(questionIndex, answerIndex, event.target.value)} placeholder={`Antwort ${answerIndex + 1}`} required className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2" /></label>)}</div>}{draft.kind === "text" && <input value={draft.expectedAnswer} onChange={(event) => updateDraftQuestion(questionIndex, { expectedAnswer: event.target.value })} placeholder="Erwartete Antwort" required className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2" />}{draft.kind === "true-false" && <select value={String(draft.expectedBoolean)} onChange={(event) => updateDraftQuestion(questionIndex, { expectedBoolean: event.target.value === "true" })} className="mt-3 rounded-lg border border-slate-200 px-3 py-2"><option value="true">Richtig: Wahr</option><option value="false">Richtig: Falsch</option></select>}{draft.kind === "number" && <div className="mt-3 grid gap-2 sm:grid-cols-2"><input type="number" value={draft.expectedNumber} onChange={(event) => updateDraftQuestion(questionIndex, { expectedNumber: event.target.value })} placeholder="Erwartete Zahl" required className="rounded-lg border border-slate-200 px-3 py-2" /><input value={draft.unit} onChange={(event) => updateDraftQuestion(questionIndex, { unit: event.target.value })} placeholder="Einheit, z. B. Tage" required className="rounded-lg border border-slate-200 px-3 py-2" /></div>}<button type="button" onClick={() => setDraftQuestions((previous) => previous.filter((_, index) => index !== questionIndex))} className="mt-3 ml-2 inline-block text-xs font-semibold text-red-600 underline" disabled={draftQuestions.length === 1}>Frage entfernen</button></fieldset>)}</div><div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={() => setDraftQuestions((previous) => [...previous, emptyDraftQuestion()])} className="rounded-lg border border-blue-700 px-3 py-2 text-sm font-semibold text-blue-700">Frage hinzufügen</button><button type="submit" disabled={quizCreating} className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{quizCreating ? "Speichert …" : "Quiz speichern"}</button><button type="button" onClick={() => { setShowQuizCreator(false); setEditingQuizId(null); setQuizCreateError(""); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">Abbrechen</button></div>{quizCreateError && <p className="mt-3 text-sm font-medium text-red-600">{quizCreateError}</p>}</form>}</div>}
+            {authError && <p className="mt-4 text-sm font-medium text-red-600">{authError}</p>}
+          </div>
+        ) : finished ? (
+          <div className={`w-full max-w-2xl rounded-[2rem] border p-8 text-center shadow-2xl md:p-14 ${cardBackground}`}><p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-700">{activeQuiz.title} abgeschlossen</p><div className="my-8"><strong className="text-7xl font-bold text-blue-700">{score}<small className={`text-3xl ${mutedText}`}> / {questions.length}</small></strong><span className={`mt-2 block ${mutedText}`}>richtige Antworten</span></div><h1 className="text-3xl font-bold">Danke, {name.trim()}!</h1><p className={`mt-3 ${mutedText}`}>Zeit: {formatElapsed(elapsedMs)}</p>{savedResult && savedResult.rank && <p className="mt-4 text-lg font-semibold text-blue-700">Dein Rang: {savedResult.rank}. Platz</p>}{authError && <p className="mt-4 text-sm font-medium text-red-600">{authError}</p>}<div className="my-8 flex justify-center gap-2" aria-label={`${score} von ${questions.length} Fragen richtig`}>{questions.map((item, index) => <span key={item.id} className={`h-3 w-8 rounded-full ${index < score ? "bg-blue-700" : darkMode ? "bg-slate-700" : "bg-slate-200"}`} />)}</div><div className="flex flex-wrap justify-center gap-3"><button className="rounded-xl bg-blue-700 px-6 py-3 font-semibold text-white transition hover:bg-blue-800" onClick={() => beginQuiz(activeQuizId)}>Nochmal starten <span>↻</span></button><button type="button" onClick={backToDashboard} className={`rounded-xl border px-6 py-3 font-semibold ${darkMode ? "border-slate-600" : "border-slate-200"}`}>Zum Dashboard</button><button type="button" onClick={() => { setRankingQuizId(activeQuizId); setShowRanking(true); }} className="rounded-xl border border-blue-700 px-6 py-3 font-semibold text-blue-700">Rangliste</button></div></div>
+        ) : (
+          <div className={`w-full max-w-4xl rounded-[2rem] border p-8 shadow-2xl md:p-14 ${cardBackground}`}>
+            <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-700">{activeQuiz.title} · {name.trim()}</p><h1 className="mt-3 text-3xl font-bold md:text-5xl">Deine nächste Frage</h1></div><div className="text-right"><strong className="text-4xl text-blue-700">{String(current + 1).padStart(2, "0")}</strong><span className={`block text-sm ${mutedText}`}>/ {String(questions.length).padStart(2, "0")}</span><span className={`mt-2 block text-sm font-semibold ${mutedText}`} aria-label="Vergangene Zeit">Zeit {formatElapsed(elapsedMs)}</span></div></div>
+            <div className={`mt-8 h-2 overflow-hidden rounded-full ${darkMode ? "bg-slate-700" : "bg-slate-100"}`}><span className="block h-full rounded-full bg-blue-700 transition-all duration-300" style={{ width: `${progress}%` }} /></div>
+            {question && <><p className="mt-10 text-2xl font-semibold leading-relaxed md:text-3xl">{question.question}</p>{showFoundingVideo && <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-black shadow-lg"><video className="aspect-video w-full" controls preload="metadata" title="Screenrecording zur Gründung von Roche"><source src="/Bildschirmaufnahme%202026-10-13%20104014.mp4" type="video/mp4" />Dein Browser unterstützt dieses Videoformat nicht.</video></div>}
+              {question.kind === "multiple-choice" ? <div className="mt-8 grid gap-4 md:grid-cols-2" role="group" aria-label="Antwortmöglichkeiten">{question.answers.map((answer, index) => <button key={answer.text} type="button" disabled={Boolean(feedback)} className={`flex min-h-20 items-center gap-4 rounded-2xl border-2 px-5 py-4 text-left font-medium transition hover:-translate-y-0.5 disabled:cursor-default disabled:hover:translate-y-0 ${answerColors[index]} ${isDevMode && answer.correct ? "font-extrabold" : ""}`} onClick={() => chooseAnswer(answer)}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/80 text-sm font-bold text-slate-700">{answerLetters[index]}</span><span>{answer.text}</span></button>)}</div> : question.kind === "true-false" ? <div className="mt-8 grid gap-4 sm:grid-cols-2" role="group" aria-label="Wahr oder Falsch"><button type="button" disabled={Boolean(feedback)} onClick={() => chooseBooleanAnswer(true)} className="min-h-20 rounded-2xl border-2 border-emerald-200 bg-emerald-50 px-5 py-4 text-lg font-semibold text-emerald-900 disabled:opacity-60">Wahr</button><button type="button" disabled={Boolean(feedback)} onClick={() => chooseBooleanAnswer(false)} className="min-h-20 rounded-2xl border-2 border-red-200 bg-red-50 px-5 py-4 text-lg font-semibold text-red-900 disabled:opacity-60">Falsch</button></div> : <form onSubmit={submitFreeAnswer} className="mt-8 flex max-w-xl flex-col gap-3 sm:flex-row"><input type={question.kind === "number" ? "number" : "text"} inputMode={question.kind === "number" ? "numeric" : "text"} value={answerDraft} onChange={(event) => { setAnswerDraft(event.target.value); setAnswerError(""); }} placeholder={question.placeholder} disabled={Boolean(feedback)} className={`min-w-0 flex-1 rounded-xl border px-4 py-3 outline-none ring-blue-200 focus:ring-4 ${darkMode ? "border-slate-600 bg-slate-700 text-white" : "border-slate-200 bg-white text-slate-900"}`} aria-label="Antwort eingeben" /><button type="submit" disabled={Boolean(feedback)} className="rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white disabled:opacity-60">Prüfen</button></form>}
+              {answerError && <p className="mt-3 text-sm font-medium text-red-600">{answerError}</p>}
+              {feedback && <div className={`mt-8 rounded-2xl border p-5 ${feedback.correct ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-red-300 bg-red-50 text-red-900"}`} role="status"><p className="font-bold">{feedback.correct ? "Richtig!" : "Noch nicht richtig."}</p>{!feedback.correct && <p className="mt-1 text-sm">Richtige Antwort: {feedback.expected}</p>}<button type="button" onClick={continueQuiz} className="mt-4 rounded-xl bg-blue-700 px-5 py-3 font-semibold text-white">{current === questions.length - 1 ? "Ergebnis anzeigen" : "Weiter"} <span aria-hidden="true">→</span></button></div>}
+              <div className={`mt-8 flex flex-col gap-4 border-t pt-6 text-sm sm:flex-row sm:items-center sm:justify-between ${darkMode ? "border-slate-700 text-slate-300" : "border-slate-200 text-slate-600"}`}><span>{feedback ? "Prüfe dein Feedback und fahre dann fort." : question.kind === "multiple-choice" ? "Wähle eine Antwort aus." : question.kind === "true-false" ? "Wähle Wahr oder Falsch aus." : "Gib deine Antwort ein und prüfe sie."}</span><button type="button" onClick={backToDashboard} className="font-semibold text-blue-700 transition hover:text-blue-900">← Dashboard</button></div>
+            </>}
+          </div>
+        )}
+      </section>
+
+      <footer className={`relative z-10 mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-6 pb-6 text-xs ${mutedText} lg:px-10`}><span>Roche Wissenstest</span><span>Doing now what patients need next.</span><div className="flex items-center gap-4"><button type="button" onClick={() => setDarkMode((value) => !value)} className="font-semibold transition hover:text-blue-700" aria-label={darkMode ? "Light mode aktivieren" : "Dark mode aktivieren"}>{darkMode ? "☀ Light mode" : "☾ Night mode"}</button></div></footer>
+    </main>
+  );
+}
